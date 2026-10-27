@@ -1,0 +1,4 @@
+out/
+*.exe
+hajime_settings.json
+hajime_diag.*
