@@ -340,60 +340,59 @@ func (w *winEnv) RClick() {
 	time.AfterFunc(12*time.Millisecond, func() { w.mouseEvent(0x0010) })
 }
 
-// Beep - громкий сигнал: свой тон на полной амплитуде (системный звук заметно тише).
+// Beep - обычный системный сигнал "Exclamation", но в 2 раза громче по амплитуде:
+// звуковой файл Windows читается и усиливается (с мягким ограничением), потом играется из памяти.
 func (w *winEnv) Beep() {
-	if r, _, _ := pPlaySound.Call(uintptr(unsafe.Pointer(&alertWav[0])), 0, 0x0004|0x0001|0x0002); r == 0 {
-		pMessageBeep.Call(0x30)
-	}
-}
-
-var alertWav = makeAlertWav()
-
-// makeAlertWav строит в памяти WAV: два коротких сигнала 1 кГц на почти полной громкости.
-func makeAlertWav() []byte {
-	const rate = 44100
-	var pcm []int16
-	tone := func(ms int) {
-		n := rate * ms / 1000
-		for i := 0; i < n; i++ {
-			a := 1.0
-			if f := rate * 6 / 1000; i < f {
-				a = float64(i) / float64(f)
-			} else if i > n-f {
-				a = float64(n-i) / float64(f)
-			}
-			v := math.Sin(2*math.Pi*1000*float64(i)/rate) + 0.35*math.Sin(2*math.Pi*3000*float64(i)/rate)
-			x := v * a * 0.93
-			x = math.Max(-1, math.Min(1, x))
-			pcm = append(pcm, int16(x*32000))
+	if alertWav != nil {
+		if r, _, _ := pPlaySound.Call(uintptr(unsafe.Pointer(&alertWav[0])), 0, 0x0004|0x0001|0x0002); r != 0 {
+			return
 		}
 	}
-	gap := func(ms int) { pcm = append(pcm, make([]int16, rate*ms/1000)...) }
-	tone(140)
-	gap(60)
-	tone(140)
-	gap(60)
-	tone(220)
-	data := len(pcm) * 2
-	b := make([]byte, 0, 44+data)
-	le32 := func(v uint32) { b = append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24)) }
-	le16 := func(v uint16) { b = append(b, byte(v), byte(v>>8)) }
-	b = append(b, "RIFF"...)
-	le32(uint32(36 + data))
-	b = append(b, "WAVEfmt "...)
-	le32(16)
-	le16(1)
-	le16(1)
-	le32(rate)
-	le32(rate * 2)
-	le16(2)
-	le16(16)
-	b = append(b, "data"...)
-	le32(uint32(data))
-	for _, v := range pcm {
-		le16(uint16(v))
+	pMessageBeep.Call(0x30)
+}
+
+var alertWav = loadAlertWav()
+
+func loadAlertWav() []byte {
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
 	}
-	return b
+	b, err := os.ReadFile(filepath.Join(root, "Media", "Windows Exclamation.wav"))
+	if err != nil || len(b) < 44 || string(b[0:4]) != "RIFF" || string(b[8:12]) != "WAVE" {
+		return nil
+	}
+	pcm := false
+	for p := 12; p+8 <= len(b); {
+		id, sz := string(b[p:p+4]), int(uint32(b[p+4])|uint32(b[p+5])<<8|uint32(b[p+6])<<16|uint32(b[p+7])<<24)
+		body := p + 8
+		if id == "fmt " && body+16 <= len(b) {
+			format := int(b[body]) | int(b[body+1])<<8
+			bits := int(b[body+14]) | int(b[body+15])<<8
+			pcm = format == 1 && bits == 16
+		}
+		if id == "data" {
+			if !pcm {
+				return nil
+			}
+			end := body + sz
+			if end > len(b) || sz < 0 {
+				end = len(b)
+			}
+			for i := body; i+1 < end; i += 2 {
+				v := float64(int16(uint16(b[i]) | uint16(b[i+1])<<8))
+				v *= 2.0 // усиление x2; выше порога - мягкое ограничение, чтобы не хрипело
+				if av := math.Abs(v); av > 24000 {
+					v = math.Copysign(24000+8767*math.Tanh((av-24000)/8767), v)
+				}
+				u := uint16(int16(v))
+				b[i], b[i+1] = byte(u), byte(u>>8)
+			}
+			return b
+		}
+		p = body + sz + sz%2
+	}
+	return nil
 }
 
 func (w *winEnv) KeyE() {
