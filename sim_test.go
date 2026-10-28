@@ -214,6 +214,7 @@ func (s *sim) Click() {
 	}
 	s.pending = append(s.pending, evt{s.t + s.inLag, "click"})
 }
+func (s *sim) Use()       { s.Click() }
 func (s *sim) RClick()    { s.rclicks++; s.punches = append(s.punches, s.t); s.stam -= s.drain }
 func (s *sim) Beep()      { s.beeps++ }
 func (s *sim) MouseDown() { s.pending = append(s.pending, evt{s.t + s.inLag, "down"}) }
@@ -729,8 +730,8 @@ func TestSimAutoEnergy(t *testing.T) {
 	if i < 0 {
 		t.Fatalf("ожидали E, 4, ЛКМ, ЛКМ; было %v", seq)
 	}
-	gap(t, s, i, "4", "click", 0.5)
-	gap(t, s, i+2, "click", "click", 0.5)
+	gap(t, s, i, "4", "click", 0.25)
+	gap(t, s, i+2, "click", "click", 0.25)
 	// после пополнения тренировка начинается заново (E)
 	if seqIndex(seq[i+4:], "E") < 0 {
 		t.Errorf("после пополнения ожидали новый запуск тренировки (E): %v", seq)
@@ -745,8 +746,8 @@ func TestSimAutoFoodWater(t *testing.T) {
 	s := supplySim(0.9, 0.03, 0.04, true)
 	runAuto(s, AutoEnergy|AutoFood|AutoWater, false)
 	seq := logWhat(s)
-	if i := seqIndex(seq, "E", "2", "click", "click", "click", "3", "click", "click"); i < 0 {
-		t.Fatalf("ожидали E, 2, 3xЛКМ, 3, 2xЛКМ; было %v", seq)
+	if i := seqIndex(seq, "E", "2", "click", "click", "click", "click", "3", "click", "click"); i < 0 {
+		t.Fatalf("ожидали E, 2, 4xЛКМ, 3, 2xЛКМ; было %v", seq)
 	}
 	if s.beeps != 0 {
 		t.Errorf("для еды и воды сигнала быть не должно, было %d", s.beeps)

@@ -14,6 +14,7 @@ type Env interface {
 	MouseDown()
 	MouseUp()
 	Click()
+	Use() // клик ЛКМ с более долгим нажатием: использовать предмет в руке
 	RClick()
 	Beep()            // звуковое предупреждение
 	KeyE()            // нажать и отпустить E
@@ -145,6 +146,7 @@ type Engine struct {
 	supDeadl   float64
 	supBag     bool
 	lastSupply [3]float64
+	supBits    [3]uint64
 	supplyOff  uint32 // пополнение, которое не помогло: до конца сессии отключено
 
 	// статистика сессии
@@ -301,7 +303,7 @@ func (e *Engine) runWarnCheck() {
 		}
 	}
 	if energy {
-		sp := e.grabSupplies(w, h)
+		sp := e.confirmSupplies(w, h)
 		need, r2 := e.applySupplies(sp)
 		raised = r2 || raised
 		if need != 0 {
@@ -322,6 +324,49 @@ func (e *Engine) grabSupplies(w, h int) Supplies {
 		copy(full.Pix[((ys+y)*w+xs)*4:], part.Pix[y*part.W*4:(y+1)*part.W*4])
 	}
 	return ReadSupplies(full)
+}
+
+// confirmSupplies читает шкалы; если что-то кажется низким, перечитывает через 150 мс,
+// и низким считается только то, что низкое в обоих чтениях (защита от случайного сбоя распознавания).
+func (e *Engine) confirmSupplies(w, h int) Supplies {
+	a := e.grabSupplies(w, h)
+	if !a.OK || (a.Energy >= energyLowAt && a.Food > foodLowAt && a.Water > waterLowAt) {
+		e.storeSupplies(a)
+		return a
+	}
+	e.env.Sleep(150)
+	b := e.grabSupplies(w, h)
+	if !b.OK {
+		e.storeSupplies(a)
+		return a
+	}
+	e.storeSupplies(b)
+	return Supplies{
+		Energy: math.Max(a.Energy, b.Energy),
+		Food:   math.Max(a.Food, b.Food),
+		Water:  math.Max(a.Water, b.Water),
+		OK:     true,
+	}
+}
+
+func (e *Engine) storeSupplies(sp Supplies) {
+	if sp.OK {
+		atomic.StoreUint64(&e.supBits[0], math.Float64bits(sp.Energy))
+		atomic.StoreUint64(&e.supBits[1], math.Float64bits(sp.Food))
+		atomic.StoreUint64(&e.supBits[2], math.Float64bits(sp.Water))
+	}
+}
+
+// LastSupplies - последние прочитанные значения энергии, еды и воды (для диагностики), -1 - ещё не читали.
+func (e *Engine) LastSupplies() (energy, food, water float64) {
+	r := func(i int) float64 {
+		v := atomic.LoadUint64(&e.supBits[i])
+		if v == 0 {
+			return -1
+		}
+		return math.Float64frombits(v)
+	}
+	return r(0), r(1), r(2)
 }
 
 // applySupplies выставляет предупреждение об энергии и возвращает, что надо пополнить.
@@ -350,7 +395,7 @@ func (e *Engine) supplyNow() uint32 {
 	if !ok {
 		return 0
 	}
-	need, raised := e.applySupplies(e.grabSupplies(w, h))
+	need, raised := e.applySupplies(e.confirmSupplies(w, h))
 	if raised {
 		e.env.Beep()
 	}
@@ -389,20 +434,27 @@ type supStep struct {
 	msg   string  // сообщение статуса перед шагом
 }
 
-// supplySteps - порядок действий: слот 4 (энергия), 2 (еда), 3 (вода); пауза 0.5 с между действиями.
+// supplyPause - пауза между действиями при пополнении, секунд.
+const supplyPause = 0.25
+
+// supplySteps - порядок действий:
+//
+//	энергия: 4, пауза, ЛКМ, пауза, ЛКМ
+//	еда:     2, пауза, ЛКМ x4 с паузами
+//	вода:    3, пауза, ЛКМ x2 с паузами
 func supplySteps(mask uint32, gloves bool) []supStep {
 	var st []supStep
 	add := func(key, clicks int, msg string) {
-		st = append(st, supStep{key: key, wait: 0.5, msg: msg})
+		st = append(st, supStep{key: key, wait: supplyPause, msg: msg})
 		for i := 0; i < clicks; i++ {
-			st = append(st, supStep{click: true, wait: 0.5})
+			st = append(st, supStep{click: true, wait: supplyPause})
 		}
 	}
 	if mask&AutoEnergy != 0 {
 		add(4, 2, "st.supply_e")
 	}
 	if mask&AutoFood != 0 {
-		add(2, 3, "st.supply_f")
+		add(2, 4, "st.supply_f")
 	}
 	if mask&AutoWater != 0 {
 		add(3, 2, "st.supply_w")
@@ -491,7 +543,7 @@ func (e *Engine) supplyTick() {
 	if st.key > 0 {
 		e.env.Key(st.key)
 	} else if st.click {
-		e.env.Click()
+		e.env.Use()
 	}
 	e.supAt = now + st.wait
 }

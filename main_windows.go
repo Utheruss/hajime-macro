@@ -340,6 +340,14 @@ func (w *winEnv) Click() {
 	time.AfterFunc(12*time.Millisecond, func() { w.mouseEvent(0x0004) })
 }
 
+// Use - клик для использования предмета: кнопка удерживается дольше, чтобы игра точно засчитала.
+func (w *winEnv) Use() {
+	w.guardCursor()
+	w.mouseEvent(0x0002)
+	time.Sleep(60 * time.Millisecond)
+	w.mouseEvent(0x0004)
+}
+
 func (w *winEnv) RClick() {
 	w.guardCursor()
 	w.mouseEvent(0x0008)
@@ -733,6 +741,12 @@ func saveDiag() {
 		fmt.Fprintf(&sb, "stamina: %v %.3f\n", rok, fr)
 		gl := Gloves(cropFrame(f, HotbarRect(g, w, h)), g.Scale())
 		fmt.Fprintf(&sb, "gloves (0 hotbar not visible, 1 equipped, 2 not equipped): %d\n", gl)
+	}
+	en, fo, wa := engine.LastSupplies()
+	fmt.Fprintf(&sb, "supplies (last read, -1 = none): energy %.2f food %.2f water %.2f\n", en, fo, wa)
+	if f2 := env.Grab(Rect{0, 0, w, h}); f2 != nil {
+		sp := ReadSupplies(f2)
+		fmt.Fprintf(&sb, "supplies now: ok=%v energy %.2f food %.2f water %.2f\n", sp.OK, sp.Energy, sp.Food, sp.Water)
 	}
 	fmt.Fprintf(&sb, "mode=%d lead=%dms punch delay=%dms lang=%d\n", atomic.LoadInt32(&curMode), settings.LeadMs, settings.PunchMs, settings.Lang)
 	os.WriteFile(filepath.Join(dir, "hajime_diag.txt"), []byte(sb.String()), 0644)

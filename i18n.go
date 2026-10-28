@@ -125,9 +125,9 @@ Red "WARNING" appears at the bottom of the window together with a beep. Several 
 AUTO ENERGY / FOOD / WATER
 Three check boxes under the Start button. When one is on, the macro watches the three bars at the bottom right (yellow energy, food, water).
 - It acts when energy drops below 10%, or food or water is at 5% or less. The macro stops the training with E and then:
-  - energy: key 4, 0.5 s, left click, 0.5 s, left click;
-  - food: key 2, 0.5 s, three left clicks 0.5 s apart;
-  - water: key 3, 0.5 s, two left clicks 0.5 s apart.
+  - energy: key 4, 0.25 s, left click, 0.25 s, left click;
+  - food: key 2, 0.25 s, four left clicks 0.25 s apart;
+  - water: key 3, 0.25 s, two left clicks 0.25 s apart.
 - Then it waits for full stamina, waits 1 more second and starts training again. For Punch speed and Punch sharpness it puts the gloves back on (key 1) first.
 - Put the energy item in slot 4, food in slot 2 and water in slot 3 of your hotbar.
 - If a bar is empty again right after using the item (no items left?), the macro does not retry, shows a warning and goes on training.
@@ -180,9 +180,9 @@ const guideRU = `HAJIME MACRO - РУКОВОДСТВО
 АВТО-ЭНЕРГИЯ / ЕДА / ВОДА
 Три галочки под кнопкой Старт. Если галочка включена, макрос следит за тремя шкалами справа внизу (жёлтая - энергия, еда, вода).
 - Он срабатывает, когда энергии меньше 10% либо еды или воды 5% и меньше. Макрос прерывает тренировку клавишей E и затем:
-  - энергия: клавиша 4, 0.5 с, ЛКМ, 0.5 с, ЛКМ;
-  - еда: клавиша 2, 0.5 с, три ЛКМ с паузой 0.5 с;
-  - вода: клавиша 3, 0.5 с, два ЛКМ с паузой 0.5 с.
+  - энергия: клавиша 4, 0.25 с, ЛКМ, 0.25 с, ЛКМ;
+  - еда: клавиша 2, 0.25 с, четыре ЛКМ с паузой 0.25 с;
+  - вода: клавиша 3, 0.25 с, два ЛКМ с паузой 0.25 с.
 - Потом ждёт полную стамину, ещё 1 секунду и снова начинает тренировку. Для Punch speed и Punch sharpness перед этим снова надевает перчатки (клавиша 1).
 - Положите предмет с энергией в слот 4, еду в слот 2, воду в слот 3 панели.
 - Если шкала снова пуста сразу после использования (кончились предметы?), макрос не повторяет попытку, показывает предупреждение и продолжает тренироваться.
@@ -235,9 +235,9 @@ Abajo en la ventana aparece "ATENCIÓN" en rojo y suena un pitido. Pueden mostra
 ENERGÍA / COMIDA / AGUA AUTO
 Tres casillas bajo el botón Iniciar. Si una está activa, el macro vigila las tres barras de abajo a la derecha (amarilla: energía, comida, agua).
 - Actúa cuando la energía baja del 10 %, o la comida o el agua están al 5 % o menos. El macro detiene el entrenamiento con E y luego:
-  - energía: tecla 4, 0,5 s, clic izquierdo, 0,5 s, clic izquierdo;
-  - comida: tecla 2, 0,5 s, tres clics izquierdos con 0,5 s entre ellos;
-  - agua: tecla 3, 0,5 s, dos clics izquierdos con 0,5 s entre ellos.
+  - energía: tecla 4, 0,25 s, clic izquierdo, 0,25 s, clic izquierdo;
+  - comida: tecla 2, 0,25 s, cuatro clics izquierdos con 0,25 s entre ellos;
+  - agua: tecla 3, 0,25 s, dos clics izquierdos con 0,25 s entre ellos.
 - Después espera la resistencia completa, 1 segundo más y vuelve a entrenar. En Punch speed y Punch sharpness antes vuelve a poner los guantes (tecla 1).
 - Pon el objeto de energía en la ranura 4, la comida en la 2 y el agua en la 3 de la barra.
 - Si la barra vuelve a estar vacía justo después de usar el objeto (¿sin objetos?), el macro no reintenta, muestra un aviso y sigue entrenando.
