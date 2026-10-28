@@ -112,6 +112,14 @@ type Engine struct {
 	bagSok     bool
 	bagGl      GlovesState
 
+	// предупреждения (WarnGloves/WarnCap/WarnEnergy), читаются из интерфейса
+	warn       uint32
+	capSeen    bool
+	capChecks  int
+	capRecheck float64
+	warnNext   float64
+	bagEnergy  bool
+
 	// статистика сессии
 	trainings int64
 	punches   int64
@@ -163,6 +171,90 @@ func (e *Engine) SessionStats() (trainings, punches int64, seconds float64) {
 }
 
 func (e *Engine) say(key string, args ...any) { e.status(key, args, e.lastStam) }
+
+// Предупреждения: можно показывать несколько сразу.
+const (
+	WarnGloves uint32 = 1 << iota // перчатки не надеты
+	WarnCap                       // кап стата достигнут (тренировка больше его не повышает)
+	WarnEnergy                    // энергии меньше 10%
+)
+
+// Warnings - набор активных предупреждений (битовая маска Warn*).
+func (e *Engine) Warnings() uint32 { return atomic.LoadUint32(&e.warn) }
+
+// setWarn включает/выключает предупреждение; true, если оно только что появилось.
+func (e *Engine) setWarn(bit uint32, on bool) bool {
+	for {
+		old := atomic.LoadUint32(&e.warn)
+		nw := old &^ bit
+		if on {
+			nw = old | bit
+		}
+		if atomic.CompareAndSwapUint32(&e.warn, old, nw) {
+			return on && old&bit == 0
+		}
+	}
+}
+
+func (e *Engine) clearWarn(bits uint32) {
+	for {
+		old := atomic.LoadUint32(&e.warn)
+		if atomic.CompareAndSwapUint32(&e.warn, old, old&^bits) {
+			return
+		}
+	}
+}
+
+// capScales - масштабы, в которых искать сообщение о капе: как у интерфейса, по высоте кадра и без масштаба.
+func (e *Engine) capScales(h int) []float64 {
+	var ks []float64
+	add := func(k float64) {
+		for _, v := range ks {
+			if math.Abs(v-k) < 0.03 {
+				return
+			}
+		}
+		ks = append(ks, k)
+	}
+	if e.stamOK {
+		add(e.stam.Scale())
+	}
+	add(float64(h) / 1078)
+	add(1.0)
+	return ks
+}
+
+// checkWarnings ищет на экране сообщение о капе и (если energy) читает шкалу энергии.
+// При появлении нового предупреждения подаёт звуковой сигнал.
+func (e *Engine) checkWarnings(energy bool) {
+	w, h, ok := e.env.ClientSize()
+	if !ok {
+		return
+	}
+	raised := false
+	if !e.capSeen {
+		if CapMessage(e.env.Grab(CapBand(w, h)), e.capScales(h)) {
+			e.capSeen = true
+			raised = e.setWarn(WarnCap, true) || raised
+		}
+	}
+	if energy {
+		if low, found := EnergyLow(e.env.Grab(Rect{0, 0, w, h})); found {
+			raised = e.setWarn(WarnEnergy, low) || raised
+		}
+	}
+	if raised {
+		e.env.Beep()
+	}
+}
+
+// newTrainingWarnings - начало новой тренировки: предупреждения проверяются заново.
+func (e *Engine) newTrainingWarnings(now float64) {
+	e.clearWarn(WarnCap | WarnEnergy | WarnGloves)
+	e.capSeen = false
+	e.capChecks, e.capRecheck = 2, now+1.0
+	e.checkWarnings(true)
+}
 
 func sign(v float64) int {
 	switch {
@@ -251,6 +343,8 @@ func (e *Engine) toggle() {
 		if e.set().Mode == 3 {
 			e.bagRest, e.bagLeft, e.glvWarned = false, true, false
 			e.bagCheckAt = 0
+			e.clearWarn(WarnCap | WarnEnergy | WarnGloves)
+			e.capSeen, e.bagEnergy, e.warnNext = false, true, e.env.Now()
 			e.nextPunch = e.env.Now()
 			e.setState(stBag)
 			e.say("st.bag")
@@ -268,6 +362,7 @@ func (e *Engine) toggle() {
 			e.env.KeyE()
 		}
 	}
+	atomic.StoreUint32(&e.warn, 0)
 	e.setState(stIdle)
 	e.say("st.stopped")
 }
@@ -348,10 +443,12 @@ func (e *Engine) seekTick() {
 			e.env.Beep()
 		}
 		e.fullSince = -1
+		e.setWarn(WarnGloves, true)
 		e.say("st.nogloves")
 		e.env.Sleep(150)
 		return
 	}
+	e.setWarn(WarnGloves, false)
 	e.glvWarned = false
 	if fr >= 0.995 {
 		// стамина полная: ждём ещё 1 секунду, потом жмём E
@@ -468,6 +565,7 @@ func (e *Engine) beginTrain(bar Bar) {
 	e.lastSeen = e.env.Now()
 	e.lastStat = 0
 	atomic.AddInt64(&e.trainings, 1)
+	e.newTrainingWarnings(e.env.Now())
 	e.say("st.training", e.curMode)
 }
 
@@ -502,6 +600,12 @@ func (e *Engine) pushSample(t, x float64) {
 }
 
 func (e *Engine) trainTick() {
+	if !e.capSeen && e.capChecks > 0 && e.env.Now() >= e.capRecheck {
+		// сообщение о капе может появиться не сразу - перепроверяем пару раз
+		e.capChecks--
+		e.capRecheck = e.env.Now() + 1.5
+		e.checkWarnings(false)
+	}
 	fr := e.env.Grab(e.strip)
 	t := e.env.Now()
 	x, ok := FindIndicator(fr, e.lbar)
@@ -655,13 +759,23 @@ func (e *Engine) bagTick() {
 			e.glvWarned = true
 			e.env.Beep()
 		}
+		e.setWarn(WarnGloves, true)
 		e.say("st.nogloves")
 		e.env.Sleep(150)
 		return
 	}
+	e.setWarn(WarnGloves, false)
 	if e.glvWarned {
 		e.glvWarned = false
 		e.nextPunch = now
+	}
+	if now >= e.warnNext {
+		e.checkWarnings(e.bagEnergy)
+		e.bagEnergy = false
+		e.warnNext = now + 1.5
+		if e.capSeen {
+			e.warnNext = now + 3600
+		}
 	}
 	if e.bagRest {
 		if sok && fr >= 0.995 {
@@ -671,6 +785,8 @@ func (e *Engine) bagTick() {
 			if now-e.fullSince >= fullWait {
 				e.bagRest, e.fullSince = false, -1
 				e.nextPunch = now
+				e.clearWarn(WarnCap | WarnEnergy)
+				e.capSeen, e.bagEnergy, e.warnNext = false, true, now+0.4
 				e.say("st.bag")
 				return
 			}

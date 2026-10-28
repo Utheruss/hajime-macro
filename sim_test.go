@@ -46,6 +46,8 @@ type sim struct {
 	punches        []float64
 	clickTimes     []float64
 	hotbar         bool
+	capMsg         bool
+	energy         float64 // <0 - шкалы нет на экране
 	glovesOn       bool
 	drain          float64
 	keyE           int
@@ -61,6 +63,7 @@ func newSim(mode int, speed float64, accel bool) *sim {
 	s := &sim{mode: mode, cw: 1917, ch: 1078, bx0: 721, bx1: 1198, by0: 406, by1: 428, bar: true,
 		dispLag: 0.025, inLag: 0.010, grabCost: 0.002, limit: 30, rng: rand.New(rand.NewSource(1)),
 		speed: speed, accel: accel, maxSp: 960, stam: 1, dir: 1}
+	s.energy = -1
 	s.x = float64(s.bx0) + 2
 	s.newBox()
 	return s
@@ -209,7 +212,42 @@ func (s *sim) hotbarPixel(x, y int) (int, int, int, bool) {
 	return 0, 0, 0, false
 }
 
+// трубка энергии и сообщение о капе, как в игре (масштаб 1.0)
+func (s *sim) warnPixel(x, y int) (int, int, int, bool) {
+	if s.capMsg {
+		tx, ty := x-993, y-793
+		if ty >= 0 && ty < len(capTpl) && tx >= 0 && tx < len(capTpl[0]) {
+			switch capTpl[ty][tx] {
+			case 'W':
+				return 255, 255, 255, true
+			case 'D':
+				return 14, 12, 30, true
+			}
+		}
+	}
+	if s.energy >= 0 && x >= 1814 && x <= 1839 && y >= 931 && y <= 1057 {
+		if x <= 1815 || x >= 1838 || y <= 932 || y >= 1056 {
+			return 19, 18, 58, true
+		}
+		if x <= 1817 {
+			return 169, 173, 220, true
+		}
+		if x >= 1836 {
+			return 91, 93, 148, true
+		}
+		top := 1055 - int(s.energy*123)
+		if y > top {
+			return 232, 217, 83, true
+		}
+		return 42, 40, 66, true
+	}
+	return 0, 0, 0, false
+}
+
 func (s *sim) pixel(x, y int, ix float64) (int, int, int) {
+	if r, g, b, ok := s.warnPixel(x, y); ok {
+		return r, g, b
+	}
 	if s.hotbar && y >= ch0 && x >= 658+0 {
 		if r, g, b, ok := s.hotbarPixel(x, y); ok {
 			return r, g, b
@@ -444,5 +482,57 @@ func TestSimGlovesWarningBar(t *testing.T) {
 	}
 	if s.keyE != 0 {
 		t.Errorf("без перчаток E нажимать нельзя, нажато %d", s.keyE)
+	}
+}
+
+func TestSimWarnings(t *testing.T) {
+	s := newSim(1, 300, false)
+	s.limit = 6
+	s.capMsg, s.energy = true, 0.06
+	e := run(t, s, 35)
+	if w := e.Warnings(); w&WarnCap == 0 || w&WarnEnergy == 0 {
+		t.Errorf("ожидали предупреждения о капе и энергии, флаги %b", w)
+	}
+	if s.beeps != 1 {
+		t.Errorf("ожидали один писк на обе новые тревоги, было %d", s.beeps)
+	}
+	// новая тренировка: предупреждения сбрасываются и появляются снова со звуком
+	e.newTrainingWarnings(e.env.Now())
+	if s.beeps != 2 || e.Warnings()&(WarnCap|WarnEnergy) != WarnCap|WarnEnergy {
+		t.Errorf("при новой тренировке сигнал должен повториться: писков %d, флаги %b", s.beeps, e.Warnings())
+	}
+	// энергию пополнили, кап убрали - тревог нет
+	s.capMsg, s.energy = false, 0.8
+	e.newTrainingWarnings(e.env.Now())
+	if e.Warnings() != 0 || s.beeps != 2 {
+		t.Errorf("тревог быть не должно: флаги %b, писков %d", e.Warnings(), s.beeps)
+	}
+}
+
+func TestSimNoWarnings(t *testing.T) {
+	s := newSim(1, 300, false)
+	s.limit = 4
+	s.energy = 0.9
+	e := run(t, s, 35)
+	if e.Warnings() != 0 || s.beeps != 0 {
+		t.Errorf("тревог быть не должно: флаги %b, писков %d", e.Warnings(), s.beeps)
+	}
+}
+
+func TestSimBagWarnings(t *testing.T) {
+	s := newSim(3, 0, false)
+	s.bar = false
+	s.hotbar, s.glovesOn = true, true
+	s.limit = 6
+	s.capMsg, s.energy = true, 0.05
+	set := func() Settings { return Settings{Mode: 3, LeadMs: 35, PunchMs: 300} }
+	e := NewEngine(s, set, func(string, []any, float64) {})
+	e.Send(CmdToggle)
+	e.Run()
+	if w := e.Warnings(); w&WarnCap == 0 || w&WarnEnergy == 0 {
+		t.Errorf("груша: ожидали предупреждения о капе и энергии, флаги %b", w)
+	}
+	if s.beeps != 1 {
+		t.Errorf("груша: ожидали один писк, было %d", s.beeps)
 	}
 }

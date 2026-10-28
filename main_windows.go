@@ -66,6 +66,7 @@ var (
 	pKeybdEvent         = user32.NewProc("keybd_event")
 	pMessageBeep        = user32.NewProc("MessageBeep")
 	pMoveWindow         = user32.NewProc("MoveWindow")
+	pSetWindowPos       = user32.NewProc("SetWindowPos")
 	pSetForegroundGuide = user32.NewProc("SetForegroundWindow")
 
 	pCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
@@ -401,7 +402,7 @@ var (
 	dpi      = 96
 
 	hMain, hCombo, hButton, hStatus, hProg, hLead, hHint, hStam, hPunch, hLangBox, hSess, hGuideBtn uintptr
-	hWarn, hFontBold                                                                                uintptr
+	hWarn, hWarnText, hFontBold                                                                     uintptr
 	hGuide, hGuideEdit, hFont                                                                       uintptr
 	engine                                                                                          *Engine
 	env                                                                                             *winEnv
@@ -417,7 +418,8 @@ var (
 	lastStam  = ""
 	lastSess  = ""
 	lastHint  = ""
-	warnShown = false
+	lastWarn  = uint32(0)
+	winStyle  uint32
 	statNames []string
 )
 
@@ -516,6 +518,7 @@ func setLang(i int) {
 		setText(l.h, L(l.key))
 	}
 	setText(hWarn, L("ui.warning"))
+	lastWarn = ^uint32(0)
 	fillStats()
 	lastText, lastBtn, lastStam, lastSess, lastHint = "", "", "", "", ""
 	if hGuide != 0 {
@@ -539,18 +542,6 @@ func refreshUI() {
 	stMu.Lock()
 	key, args, stam := stKey, stArgs, stStam
 	stMu.Unlock()
-	warn := key == "st.nogloves"
-	if warn != warnShown {
-		warnShown = warn
-		lastText = ""
-		if warn {
-			pMoveWindow.Call(hStatus, uintptr(sc(110)), uintptr(sc(156)), uintptr(sc(210)), uintptr(sc(38)), 1)
-			pShowWindow.Call(hWarn, 5)
-		} else {
-			pShowWindow.Call(hWarn, 0)
-			pMoveWindow.Call(hStatus, uintptr(sc(10)), uintptr(sc(156)), uintptr(sc(310)), uintptr(sc(38)), 1)
-		}
-	}
 	if text := L(key, args...); text != lastText {
 		lastText = text
 		setText(hStatus, text)
@@ -574,6 +565,10 @@ func refreshUI() {
 		lastStam = st
 		setText(hStam, st)
 	}
+	if fl := engine.Warnings(); fl != lastWarn {
+		lastWarn = fl
+		showWarnings(fl)
+	}
 	tr, pu, sec := engine.SessionStats()
 	if s := L("ui.session", tr, pu, fmtDur(sec)); s != lastSess {
 		lastSess = s
@@ -583,6 +578,39 @@ func refreshUI() {
 		lastHint = h
 		setText(hHint, h)
 	}
+}
+
+const baseClientH = 362
+
+// showWarnings показывает список активных предупреждений внизу окна и подгоняет высоту окна.
+func showWarnings(fl uint32) {
+	var lines []string
+	if fl&WarnCap != 0 {
+		lines = append(lines, "- "+L("warn.cap"))
+	}
+	if fl&WarnEnergy != 0 {
+		lines = append(lines, "- "+L("warn.energy"))
+	}
+	if fl&WarnGloves != 0 {
+		lines = append(lines, "- "+L("warn.gloves"))
+	}
+	n := len(lines)
+	ch := baseClientH
+	if n > 0 {
+		setText(hWarnText, strings.Join(lines, "\r\n"))
+		setText(hWarn, L("ui.warning"))
+		pMoveWindow.Call(hWarn, uintptr(sc(10)), uintptr(sc(366)), uintptr(sc(96)), uintptr(sc(18)), 1)
+		pMoveWindow.Call(hWarnText, uintptr(sc(106)), uintptr(sc(366)), uintptr(sc(214)), uintptr(sc(34*n)), 1)
+		pShowWindow.Call(hWarn, 5)
+		pShowWindow.Call(hWarnText, 5)
+		ch = baseClientH + 10 + 34*n
+	} else {
+		pShowWindow.Call(hWarn, 0)
+		pShowWindow.Call(hWarnText, 0)
+	}
+	rc := rect{0, 0, int32(sc(330)), int32(sc(ch))}
+	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&rc)), uintptr(winStyle), 0, wsExTopmost)
+	pSetWindowPos.Call(hMain, 0, 0, 0, uintptr(rc.right-rc.left), uintptr(rc.bottom-rc.top), 0x0002|0x0004|0x0010)
 }
 
 func saveDiag() {
@@ -864,8 +892,9 @@ func main() {
 	registerClass("HajimeMacroWnd", syscall.NewCallback(wndProc))
 	registerClass("HajimeGuideWnd", syscall.NewCallback(guideProc))
 
-	const cw, chh = 330, 362
+	const cw, chh = 330, baseClientH
 	style := uint32(wsCaption | wsSysmenu | wsMinimize)
+	winStyle = style
 	rc := rect{0, 0, int32(sc(cw)), int32(sc(chh))}
 	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&rc)), uintptr(style), 0, wsExTopmost)
 	wx, wy := 40, 140
@@ -901,11 +930,13 @@ func main() {
 	hHint = child("STATIC", "", ssLeft, 0, 10, 68, 310, 34, idHint)
 	hButton = child("BUTTON", L("ui.start"), wsTabstop, 0, 10, 106, 310, 40, idButton)
 	hStatus = child("STATIC", "", ssLeft, 0, 10, 156, 310, 38, idStatus)
-	hWarn = child("STATIC", L("ui.warning"), ssLeft, 0, 10, 156, 96, 18, idWarn)
+	hWarn = child("STATIC", L("ui.warning"), ssLeft, 0, 10, 366, 96, 18, idWarn)
 	if hFontBold != 0 {
 		pSendMessage.Call(hWarn, wmSetFont, hFontBold, 1)
 	}
+	hWarnText = child("STATIC", "", ssLeft, 0, 106, 366, 214, 34, idWarn+1)
 	pShowWindow.Call(hWarn, 0)
+	pShowWindow.Call(hWarnText, 0)
 	hStam = child("STATIC", "", ssLeft, 0, 10, 198, 310, 16, idStam)
 	hProg = child("msctls_progress32", "", 0, 0, 10, 216, 310, 14, idProg)
 	pSendMessage.Call(hProg, pbmSetRange, 0, 100)

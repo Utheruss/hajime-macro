@@ -59,7 +59,10 @@ var tr = map[string][3]string{
 	"st.ended":       {"Тренировка кончилась. Жду стамину", "Training ended. Waiting for stamina", "Entreno terminado. Esperando aguante"},
 	"st.bag":         {"Бью грушу", "Hitting the bag", "Golpeando el saco"},
 	"st.bag_rest":    {"Стамина кончилась, жду восстановления", "Out of stamina, waiting to recover", "Sin aguante, esperando a recuperar"},
-	"st.nogloves":    {"Наденьте перчатки (клавиша 1 в игре)", "Equip your gloves (press 1 in the game)", "Equípate los guantes (tecla 1 en el juego)"},
+	"st.nogloves":    {"Ожидание: перчатки не надеты", "Waiting: gloves not equipped", "Esperando: guantes no equipados"},
+	"warn.gloves":    {"Наденьте перчатки (клавиша 1 в игре)", "Equip your gloves (press 1 in the game)", "Equípate los guantes (tecla 1 en el juego)"},
+	"warn.cap":       {"Достигнут кап стата: тренировка больше его не повышает", "Stat cap reached: training no longer raises it", "Límite del stat alcanzado: entrenar ya no lo sube"},
+	"warn.energy":    {"Энергии меньше 10%: восстановите её", "Energy is below 10%: restore it", "Energía por debajo del 10 %: recupérala"},
 	"ui.warning":     {"ВНИМАНИЕ", "WARNING", "ATENCIÓN"},
 	"st.paused":      {"Пауза: окно игры не активно", "Paused: the game window is not active", "Pausa: la ventana del juego no está activa"},
 	"st.hotkey_busy": {"F6 занята другой программой. Используй кнопку Старт", "F6 is used by another program. Use the Start button", "F6 la usa otro programa. Usa el botón Iniciar"},
@@ -104,6 +107,12 @@ WHAT THE MACRO DOES
 - Punch speed and punch sharpness need boxing gloves: press 1 in the game first. For the bag the macro warns you (beep and a message) if the gloves are not equipped.
 - If the Roblox window is not the active window, the macro pauses by itself and continues when you come back to the game.
 
+WARNINGS
+Red "WARNING" appears at the bottom of the window together with a beep. Several warnings can be shown at once.
+- Stat cap reached: the game says "... is at your goal ... training won't raise it further". Training goes on, so the macro warns you at the start of every training.
+- Energy below 10%: the yellow energy bar at the bottom right is almost empty. Restore it. The check is repeated at the start of every training.
+- Gloves not equipped (Punch speed, Punch sharpness): the macro waits until you equip them (key 1).
+
 SETTINGS
 - Lead time, ms: compensates screen and input delay. Clicks too late? Raise it (50, 70...). Too early? Lower it. It matters most on fast equipment.
 - Delay between punches, ms: the pause between bag hits (300 by default).
@@ -141,6 +150,12 @@ const guideRU = `HAJIME MACRO - РУКОВОДСТВО
 - Для punch speed и punch sharpness нужны боксёрские перчатки: сначала нажми 1 в игре. На груше макрос предупредит (писк и сообщение), если перчатки не надеты.
 - Если окно Roblox не активно, макрос сам встаёт на паузу и продолжает, когда ты вернёшься в игру.
 
+ПРЕДУПРЕЖДЕНИЯ
+Внизу окна появляется красное "ВНИМАНИЕ" и звучит сигнал. Несколько предупреждений могут показываться одновременно.
+- Достигнут кап стата: игра пишет "... is at your goal ... training won't raise it further". Тренировка при этом продолжается, поэтому макрос предупреждает в начале каждой тренировки.
+- Энергии меньше 10%: жёлтая шкала энергии справа внизу почти пуста. Восстановите её. Проверка повторяется в начале каждой тренировки.
+- Перчатки не надеты (Punch speed, Punch sharpness): макрос ждёт, пока вы наденете их (клавиша 1).
+
 НАСТРОЙКИ
 - Опережение, мс: компенсирует задержку экрана и ввода. Клики поздно? Увеличь (50, 70...). Рано? Уменьши. Важнее всего на быстрых тренажёрах.
 - Пауза между ударами, мс: пауза между ударами по груше (по умолчанию 300).
@@ -177,6 +192,12 @@ QUÉ HACE EL MACRO
 - Punch sharpness (saco): golpea el saco con los botones izquierdo y derecho del ratón por turnos. Cuando se acaba el aguante, espera a recuperarlo por completo y sigue. No pulsa E.
 - Punch speed y punch sharpness necesitan guantes de boxeo: pulsa antes 1 en el juego. En el saco el macro te avisa (pitido y mensaje) si no llevas los guantes.
 - Si la ventana de Roblox no está activa, el macro se pone en pausa solo y continúa cuando vuelves al juego.
+
+AVISOS
+Abajo en la ventana aparece "ATENCIÓN" en rojo y suena un pitido. Pueden mostrarse varios avisos a la vez.
+- Límite del stat alcanzado: el juego dice "... is at your goal ... training won't raise it further". El entrenamiento continúa, por eso el macro avisa al inicio de cada entrenamiento.
+- Energía por debajo del 10 %: la barra amarilla de energía (abajo a la derecha) está casi vacía. Recupérala. Se comprueba al inicio de cada entrenamiento.
+- Guantes no equipados (Punch speed, Punch sharpness): el macro espera hasta que te los equipes (tecla 1).
 
 AJUSTES
 - Adelanto, ms: compensa el retraso de la pantalla y de la entrada. ¿Los clics llegan tarde? Súbelo (50, 70...). ¿Demasiado pronto? Bájalo. Importa sobre todo en equipos rápidos.
