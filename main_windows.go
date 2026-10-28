@@ -65,6 +65,7 @@ var (
 	pSetProcessDPIAware = user32.NewProc("SetProcessDPIAware")
 	pKeybdEvent         = user32.NewProc("keybd_event")
 	pMessageBeep        = user32.NewProc("MessageBeep")
+	pPlaySound          = winmm.NewProc("PlaySoundW")
 	pMoveWindow         = user32.NewProc("MoveWindow")
 	pSetWindowPos       = user32.NewProc("SetWindowPos")
 	pSetForegroundGuide = user32.NewProc("SetForegroundWindow")
@@ -339,7 +340,61 @@ func (w *winEnv) RClick() {
 	time.AfterFunc(12*time.Millisecond, func() { w.mouseEvent(0x0010) })
 }
 
-func (w *winEnv) Beep() { pMessageBeep.Call(0x30) }
+// Beep - громкий сигнал: свой тон на полной амплитуде (системный звук заметно тише).
+func (w *winEnv) Beep() {
+	if r, _, _ := pPlaySound.Call(uintptr(unsafe.Pointer(&alertWav[0])), 0, 0x0004|0x0001|0x0002); r == 0 {
+		pMessageBeep.Call(0x30)
+	}
+}
+
+var alertWav = makeAlertWav()
+
+// makeAlertWav строит в памяти WAV: два коротких сигнала 1 кГц на почти полной громкости.
+func makeAlertWav() []byte {
+	const rate = 44100
+	var pcm []int16
+	tone := func(ms int) {
+		n := rate * ms / 1000
+		for i := 0; i < n; i++ {
+			a := 1.0
+			if f := rate * 6 / 1000; i < f {
+				a = float64(i) / float64(f)
+			} else if i > n-f {
+				a = float64(n-i) / float64(f)
+			}
+			v := math.Sin(2*math.Pi*1000*float64(i)/rate) + 0.35*math.Sin(2*math.Pi*3000*float64(i)/rate)
+			x := v * a * 0.93
+			x = math.Max(-1, math.Min(1, x))
+			pcm = append(pcm, int16(x*32000))
+		}
+	}
+	gap := func(ms int) { pcm = append(pcm, make([]int16, rate*ms/1000)...) }
+	tone(140)
+	gap(60)
+	tone(140)
+	gap(60)
+	tone(220)
+	data := len(pcm) * 2
+	b := make([]byte, 0, 44+data)
+	le32 := func(v uint32) { b = append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24)) }
+	le16 := func(v uint16) { b = append(b, byte(v), byte(v>>8)) }
+	b = append(b, "RIFF"...)
+	le32(uint32(36 + data))
+	b = append(b, "WAVEfmt "...)
+	le32(16)
+	le16(1)
+	le16(1)
+	le32(rate)
+	le32(rate * 2)
+	le16(2)
+	le16(16)
+	b = append(b, "data"...)
+	le32(uint32(data))
+	for _, v := range pcm {
+		le16(uint16(v))
+	}
+	return b
+}
 
 func (w *winEnv) KeyE() {
 	w.keyEvent(0x45, 0x12, false)
@@ -580,9 +635,9 @@ func refreshUI() {
 	}
 }
 
-const baseClientH = 362
+const baseClientH = 434
 
-// showWarnings показывает список активных предупреждений внизу окна и подгоняет высоту окна.
+// showWarnings показывает список активных предупреждений в отведённой для них области окна.
 func showWarnings(fl uint32) {
 	var lines []string
 	if fl&WarnCap != 0 {
@@ -594,23 +649,15 @@ func showWarnings(fl uint32) {
 	if fl&WarnGloves != 0 {
 		lines = append(lines, "- "+L("warn.gloves"))
 	}
-	n := len(lines)
-	ch := baseClientH
-	if n > 0 {
-		setText(hWarnText, strings.Join(lines, "\r\n"))
-		setText(hWarn, L("ui.warning"))
-		pMoveWindow.Call(hWarn, uintptr(sc(10)), uintptr(sc(366)), uintptr(sc(96)), uintptr(sc(18)), 1)
-		pMoveWindow.Call(hWarnText, uintptr(sc(106)), uintptr(sc(366)), uintptr(sc(214)), uintptr(sc(34*n)), 1)
-		pShowWindow.Call(hWarn, 5)
-		pShowWindow.Call(hWarnText, 5)
-		ch = baseClientH + 10 + 34*n
-	} else {
+	if len(lines) == 0 {
 		pShowWindow.Call(hWarn, 0)
 		pShowWindow.Call(hWarnText, 0)
+		return
 	}
-	rc := rect{0, 0, int32(sc(330)), int32(sc(ch))}
-	pAdjustWindowRect.Call(uintptr(unsafe.Pointer(&rc)), uintptr(winStyle), 0, wsExTopmost)
-	pSetWindowPos.Call(hMain, 0, 0, 0, uintptr(rc.right-rc.left), uintptr(rc.bottom-rc.top), 0x0002|0x0004|0x0010)
+	setText(hWarn, L("ui.warning"))
+	setText(hWarnText, strings.Join(lines, "\r\n"))
+	pShowWindow.Call(hWarn, 5)
+	pShowWindow.Call(hWarnText, 5)
 }
 
 func saveDiag() {
@@ -735,7 +782,7 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case 0x0138: // WM_CTLCOLORSTATIC
-		if lp == hWarn && hWarn != 0 {
+		if (lp == hWarn && hWarn != 0) || (lp == hWarnText && hWarnText != 0) {
 			pSetTextColor.Call(wp, 0x0000C8) // красный (BGR)
 			pSetBkMode.Call(wp, 1)
 			b, _, _ := pGetSysColorBrush.Call(15)
@@ -931,26 +978,26 @@ func main() {
 	hHint = child("STATIC", "", ssLeft, 0, 10, 68, 310, 34, idHint)
 	hButton = child("BUTTON", L("ui.start"), wsTabstop, 0, 10, 106, 310, 40, idButton)
 	hStatus = child("STATIC", "", ssLeft, 0, 10, 156, 310, 38, idStatus)
-	hWarn = child("STATIC", L("ui.warning"), ssLeft, 0, 10, 366, 96, 18, idWarn)
+	hWarn = child("STATIC", L("ui.warning"), ssLeft, 0, 10, 196, 310, 18, idWarn)
 	if hFontBold != 0 {
 		pSendMessage.Call(hWarn, wmSetFont, hFontBold, 1)
 	}
-	hWarnText = child("STATIC", "", ssLeft, 0, 106, 366, 214, 34, idWarn+1)
+	hWarnText = child("STATIC", "", ssLeft, 0, 10, 214, 310, 52, idWarn+1)
 	pShowWindow.Call(hWarn, 0)
 	pShowWindow.Call(hWarnText, 0)
-	hStam = child("STATIC", "", ssLeft, 0, 10, 198, 310, 16, idStam)
-	hProg = child("msctls_progress32", "", 0, 0, 10, 216, 310, 14, idProg)
+	hStam = child("STATIC", "", ssLeft, 0, 10, 270, 310, 16, idStam)
+	hProg = child("msctls_progress32", "", 0, 0, 10, 288, 310, 14, idProg)
 	pSendMessage.Call(hProg, pbmSetRange, 0, 100)
-	hSess = child("STATIC", "", ssLeft, 0, 10, 238, 310, 16, idSess)
-	label("ui.lead", 10, 266, 120, 18)
-	hLead = child("EDIT", strconv.Itoa(settings.LeadMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 134, 263, 48, 22, idLead)
-	label("ui.lead_hint", 190, 266, 130, 18)
-	label("ui.punch", 10, 294, 150, 18)
-	hPunch = child("EDIT", strconv.Itoa(settings.PunchMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 164, 291, 52, 22, idPunch)
-	label("ui.punch_hint", 224, 294, 96, 18)
-	diagBtn := child("BUTTON", L("ui.diag"), wsTabstop, 0, 10, 326, 120, 26, idDiag)
+	hSess = child("STATIC", "", ssLeft, 0, 10, 310, 310, 16, idSess)
+	label("ui.lead", 10, 338, 120, 18)
+	hLead = child("EDIT", strconv.Itoa(settings.LeadMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 134, 335, 48, 22, idLead)
+	label("ui.lead_hint", 190, 338, 130, 18)
+	label("ui.punch", 10, 366, 150, 18)
+	hPunch = child("EDIT", strconv.Itoa(settings.PunchMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 164, 363, 52, 22, idPunch)
+	label("ui.punch_hint", 224, 366, 96, 18)
+	diagBtn := child("BUTTON", L("ui.diag"), wsTabstop, 0, 10, 398, 120, 26, idDiag)
 	labels = append(labels, labelRef{diagBtn, "ui.diag"})
-	label("ui.hotkey", 140, 331, 180, 18)
+	label("ui.hotkey", 140, 403, 180, 18)
 
 	pShowWindow.Call(hMain, 5)
 	pSetTimer.Call(hMain, 1, 200, 0)
