@@ -12,6 +12,8 @@ It only **reads the screen and emulates mouse/keyboard input**, like a human wou
 - **F6** starts/stops. Second press stops the training and gives control back.
 - Pauses automatically while the Roblox window is not active.
 - Works on any resolution and Windows UI scale (everything is detected from the screen).
+- Stat cap reached: the macro beeps, stops the training (like F6) and does not start it again.
+- Auto energy / food / water (checkboxes): when energy < 10% or food/water <= 5%, it stops the training with E, uses the item from hotbar slot 4 / 2 / 3 (key, then left clicks) and continues after full stamina.
 - Red "WARNING" with a beep (several can show at once): stat cap reached, energy below 10%, gloves not equipped (Punch speed / Punch sharpness). Cap and energy are re-checked at the start of every training.
 - Languages: English (default), Русский, Español. Built-in usage guide (the **i** button).
 - Adjustable click lead time and punch delay, session statistics, "Diagnostics" button (saves a screenshot and detection report).

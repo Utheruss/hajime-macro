@@ -82,3 +82,22 @@ func TestEnergyLowSynthetic(t *testing.T) {
 		}
 	}
 }
+
+func TestSupplies(t *testing.T) {
+	for _, k := range []float64{0.70, 0.85, 1.00, 1.15, 1.33, 1.50} {
+		f := load(t, fmt.Sprintf("/tmp/scaled2/cap_%.2f.png", k))
+		s := ReadSupplies(f)
+		t.Logf("k=%.2f %+v", k, s)
+		if !s.OK || !near(s.Energy, 0.862, 0.05) || !near(s.Food, 0.855, 0.05) || !near(s.Water, 0.86, 0.05) {
+			t.Errorf("k=%.2f: неверные значения %+v", k, s)
+		}
+	}
+	for _, sh := range shots {
+		f := load(t, sh.file)
+		s := ReadSupplies(f)
+		t.Logf("%s: %+v", sh.name, s)
+		if !s.OK || s.Food <= foodLowAt || s.Water <= waterLowAt {
+			t.Errorf("%s: еда/вода ложно низкие %+v", sh.name, s)
+		}
+	}
+}

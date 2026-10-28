@@ -107,6 +107,7 @@ const (
 	esReadonly    = 0x0800
 	esAutoVScroll = 0x0040
 	bsBitmap      = 0x0080
+	bsAutoCheck   = 0x0003
 	ssLeft        = 0x0000
 
 	wmDestroy = 0x0002
@@ -126,6 +127,8 @@ const (
 	pbmSetRange    = 0x0406 // PBM_SETRANGE32
 	bmSetImage     = 0x00F7
 	emSetSel       = 0x00B1
+	bmGetCheck     = 0x00F0
+	bmSetCheck     = 0x00F1
 
 	vkF6 = 0x75
 
@@ -142,6 +145,9 @@ const (
 	idGuide  = 111
 	idSess   = 112
 	idWarn   = 113
+	idAutoE  = 120
+	idAutoF  = 121
+	idAutoW  = 122
 )
 
 // ---------- вспомогательное ----------
@@ -401,6 +407,16 @@ func (w *winEnv) KeyE() {
 	w.keyEvent(0x45, 0x12, true)
 }
 
+// Key нажимает цифровую клавишу n (слот панели предметов).
+func (w *winEnv) Key(n int) {
+	if n < 1 || n > 9 {
+		return
+	}
+	w.keyEvent(uint16(0x30+n), uint16(1+n), false)
+	time.Sleep(45 * time.Millisecond)
+	w.keyEvent(uint16(0x30+n), uint16(1+n), true)
+}
+
 func (w *winEnv) EnsureFocus() {
 	h := w.game()
 	if h == 0 {
@@ -445,6 +461,9 @@ type saved struct {
 	WinX    int  `json:"win_x"`
 	WinY    int  `json:"win_y"`
 	HasPos  bool `json:"has_pos"`
+	AutoE   bool `json:"auto_energy"`
+	AutoF   bool `json:"auto_food"`
+	AutoW   bool `json:"auto_water"`
 }
 
 var (
@@ -452,11 +471,13 @@ var (
 	curLead  uint64
 	curPunch uint64
 	curLang  int32
-	settings = saved{Stat: 0, LeadMs: 35, PunchMs: 300}
+	settings = saved{Stat: 0, LeadMs: 35, PunchMs: 300, AutoE: true, AutoF: true, AutoW: true}
+	curAuto  uint32
 	dpi      = 96
 
 	hMain, hCombo, hButton, hStatus, hProg, hLead, hHint, hStam, hPunch, hLangBox, hSess, hGuideBtn uintptr
 	hWarn, hWarnText, hFontBold                                                                     uintptr
+	hAutoE, hAutoF, hAutoW                                                                          uintptr
 	hGuide, hGuideEdit, hFont                                                                       uintptr
 	engine                                                                                          *Engine
 	env                                                                                             *winEnv
@@ -528,6 +549,22 @@ func applyStat(i int) {
 	lastHint = ""
 	saveSettings()
 }
+
+func autoMask() uint32 {
+	var v uint32
+	if settings.AutoE {
+		v |= AutoEnergy
+	}
+	if settings.AutoF {
+		v |= AutoFood
+	}
+	if settings.AutoW {
+		v |= AutoWater
+	}
+	return v
+}
+
+func applyAuto() { atomic.StoreUint32(&curAuto, autoMask()) }
 
 func applyLead(ms int) {
 	settings.LeadMs = ms
@@ -634,7 +671,7 @@ func refreshUI() {
 	}
 }
 
-const baseClientH = 434
+const baseClientH = 460
 
 // showWarnings показывает список активных предупреждений в отведённой для них области окна.
 func showWarnings(fl uint32) {
@@ -772,6 +809,18 @@ func wndProc(hwnd, msg, wp, lp uintptr) uintptr {
 			go saveDiag()
 		case id == idGuide && code == 0:
 			openGuide()
+		case (id == idAutoE || id == idAutoF || id == idAutoW) && code == 0:
+			on := func(h uintptr) bool { r, _, _ := pSendMessage.Call(h, bmGetCheck, 0, 0); return r == 1 }
+			switch id {
+			case idAutoE:
+				settings.AutoE = on(hAutoE)
+			case idAutoF:
+				settings.AutoF = on(hAutoF)
+			case idAutoW:
+				settings.AutoW = on(hAutoW)
+			}
+			applyAuto()
+			saveSettings()
 		case id == idCombo && code == cbnSelChange:
 			i, _, _ := pSendMessage.Call(hCombo, cbGetCurSel, 0, 0)
 			applyStat(int(i))
@@ -919,6 +968,7 @@ func main() {
 	atomic.StoreInt32(&curMode, int32(statDefs[settings.Stat].mode))
 	atomic.StoreUint64(&curLead, math.Float64bits(float64(settings.LeadMs)))
 	atomic.StoreUint64(&curPunch, math.Float64bits(float64(settings.PunchMs)))
+	applyAuto()
 
 	env = newWinEnv()
 	if d, _, _ := pGetDeviceCaps.Call(env.screenDC, 88); d >= 96 { // LOGPIXELSX
@@ -931,7 +981,8 @@ func main() {
 			Mode:    int(atomic.LoadInt32(&curMode)),
 			LeadMs:  math.Float64frombits(atomic.LoadUint64(&curLead)),
 			PunchMs: math.Float64frombits(atomic.LoadUint64(&curPunch)),
-			Gloves:  statDefs[settings.Stat].gloves,
+			Gloves:  statDefs[settings.Stat].gloves || statDefs[settings.Stat].mode == 3,
+			Auto:    atomic.LoadUint32(&curAuto),
 		}
 	}, setStatus)
 	engine.Async = true
@@ -976,27 +1027,40 @@ func main() {
 	fillStats()
 	hHint = child("STATIC", "", ssLeft, 0, 10, 68, 310, 34, idHint)
 	hButton = child("BUTTON", L("ui.start"), wsTabstop, 0, 10, 106, 310, 40, idButton)
-	hStatus = child("STATIC", "", ssLeft, 0, 10, 156, 310, 38, idStatus)
-	hWarn = child("STATIC", L("ui.warning"), ssLeft, 0, 10, 196, 310, 18, idWarn)
+	mk := func(key string, x, id int, on bool) uintptr {
+		h := child("BUTTON", L(key), bsAutoCheck|wsTabstop, 0, x, 150, 104, 22, uintptr(id))
+		labels = append(labels, labelRef{h, key})
+		v := uintptr(0)
+		if on {
+			v = 1
+		}
+		pSendMessage.Call(h, bmSetCheck, v, 0)
+		return h
+	}
+	hAutoE = mk("ui.auto_e", 10, idAutoE, settings.AutoE)
+	hAutoF = mk("ui.auto_f", 114, idAutoF, settings.AutoF)
+	hAutoW = mk("ui.auto_w", 218, idAutoW, settings.AutoW)
+	hStatus = child("STATIC", "", ssLeft, 0, 10, 182, 310, 38, idStatus)
+	hWarn = child("STATIC", L("ui.warning"), ssLeft, 0, 10, 222, 310, 18, idWarn)
 	if hFontBold != 0 {
 		pSendMessage.Call(hWarn, wmSetFont, hFontBold, 1)
 	}
-	hWarnText = child("STATIC", "", ssLeft, 0, 10, 214, 310, 52, idWarn+1)
+	hWarnText = child("STATIC", "", ssLeft, 0, 10, 240, 310, 52, idWarn+1)
 	pShowWindow.Call(hWarn, 0)
 	pShowWindow.Call(hWarnText, 0)
-	hStam = child("STATIC", "", ssLeft, 0, 10, 270, 310, 16, idStam)
-	hProg = child("msctls_progress32", "", 0, 0, 10, 288, 310, 14, idProg)
+	hStam = child("STATIC", "", ssLeft, 0, 10, 296, 310, 16, idStam)
+	hProg = child("msctls_progress32", "", 0, 0, 10, 314, 310, 14, idProg)
 	pSendMessage.Call(hProg, pbmSetRange, 0, 100)
-	hSess = child("STATIC", "", ssLeft, 0, 10, 310, 310, 16, idSess)
-	label("ui.lead", 10, 338, 120, 18)
-	hLead = child("EDIT", strconv.Itoa(settings.LeadMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 134, 335, 48, 22, idLead)
-	label("ui.lead_hint", 190, 338, 130, 18)
-	label("ui.punch", 10, 366, 150, 18)
-	hPunch = child("EDIT", strconv.Itoa(settings.PunchMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 164, 363, 52, 22, idPunch)
-	label("ui.punch_hint", 224, 366, 96, 18)
-	diagBtn := child("BUTTON", L("ui.diag"), wsTabstop, 0, 10, 398, 120, 26, idDiag)
+	hSess = child("STATIC", "", ssLeft, 0, 10, 336, 310, 16, idSess)
+	label("ui.lead", 10, 364, 120, 18)
+	hLead = child("EDIT", strconv.Itoa(settings.LeadMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 134, 361, 48, 22, idLead)
+	label("ui.lead_hint", 190, 364, 130, 18)
+	label("ui.punch", 10, 392, 150, 18)
+	hPunch = child("EDIT", strconv.Itoa(settings.PunchMs), esNumber|esAutoHScroll|wsTabstop|wsBorder, 0, 164, 389, 52, 22, idPunch)
+	label("ui.punch_hint", 224, 392, 96, 18)
+	diagBtn := child("BUTTON", L("ui.diag"), wsTabstop, 0, 10, 424, 120, 26, idDiag)
 	labels = append(labels, labelRef{diagBtn, "ui.diag"})
-	label("ui.hotkey", 140, 403, 180, 18)
+	label("ui.hotkey", 140, 429, 180, 18)
 
 	pShowWindow.Call(hMain, 5)
 	pSetTimer.Call(hMain, 1, 200, 0)

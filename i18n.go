@@ -61,8 +61,17 @@ var tr = map[string][3]string{
 	"st.bag_rest":    {"Стамина кончилась, жду восстановления", "Out of stamina, waiting to recover", "Sin aguante, esperando a recuperar"},
 	"st.nogloves":    {"Ожидание: перчатки не надеты", "Waiting: gloves not equipped", "Esperando: guantes no equipados"},
 	"warn.gloves":    {"Наденьте перчатки (клавиша 1)", "Equip your gloves (press 1)", "Equipa los guantes (tecla 1)"},
-	"warn.cap":       {"Достигнут кап: стат больше не растёт", "Stat cap reached: it will not grow", "Límite alcanzado: el stat ya no sube"},
+	"warn.cap":       {"Достигнут кап: тренировка остановлена", "Stat cap reached: training stopped", "Límite alcanzado: entrenamiento detenido"},
+	"warn.supply":    {"Автопополнение не помогло: проверьте предметы", "Auto-supply failed: check your items", "El auto-suministro falló: revisa tus objetos"},
 	"warn.energy":    {"Энергия ниже 10%: восстановите", "Energy below 10%: restore it", "Energía bajo 10 %: recupérala"},
+	"ui.auto_e":      {"Авто-энергия", "Auto energy", "Energía auto"},
+	"ui.auto_f":      {"Авто-еда", "Auto food", "Comida auto"},
+	"ui.auto_w":      {"Авто-вода", "Auto water", "Agua auto"},
+	"st.cap_stop":    {"Кап достигнут: тренировка остановлена", "Cap reached: training stopped", "Límite alcanzado: entrenamiento detenido"},
+	"st.supply_stop": {"Останавливаю тренировку (E)...", "Stopping the training (E)...", "Deteniendo el entrenamiento (E)..."},
+	"st.supply_e":    {"Авто-энергия: использую предмет (клавиша 4)", "Auto energy: using the item (key 4)", "Energía auto: usando el objeto (tecla 4)"},
+	"st.supply_f":    {"Авто-еда: ем (клавиша 2)", "Auto food: eating (key 2)", "Comida auto: comiendo (tecla 2)"},
+	"st.supply_w":    {"Авто-вода: пью (клавиша 3)", "Auto water: drinking (key 3)", "Agua auto: bebiendo (tecla 3)"},
 	"ui.warning":     {"ВНИМАНИЕ", "WARNING", "ATENCIÓN"},
 	"st.paused":      {"Пауза: окно игры не активно", "Paused: the game window is not active", "Pausa: la ventana del juego no está activa"},
 	"st.hotkey_busy": {"F6 занята другой программой. Используй кнопку Старт", "F6 is used by another program. Use the Start button", "F6 la usa otro programa. Usa el botón Iniciar"},
@@ -109,9 +118,21 @@ WHAT THE MACRO DOES
 
 WARNINGS
 Red "WARNING" appears at the bottom of the window together with a beep. Several warnings can be shown at once.
-- Stat cap reached: the game says "... is at your goal ... training won't raise it further". Training goes on, so the macro warns you at the start of every training.
+- Stat cap reached: the game says "... is at your goal ... training won't raise it further". The macro beeps, stops the training (like F6, with E) and does not start it again.
 - Energy below 10%: the yellow energy bar at the bottom right is almost empty. Restore it. The check is repeated at the start of every training.
 - Gloves not equipped (Punch speed, Punch sharpness): the macro waits until you equip them (key 1).
+
+AUTO ENERGY / FOOD / WATER
+Three check boxes under the Start button. When one is on, the macro watches the three bars at the bottom right (yellow energy, food, water).
+- It acts when energy drops below 10%, or food or water is at 5% or less. The macro stops the training with E and then:
+  - energy: key 4, 0.5 s, left click, 0.5 s, left click;
+  - food: key 2, 0.5 s, three left clicks 0.5 s apart;
+  - water: key 3, 0.5 s, two left clicks 0.5 s apart.
+- Then it waits for full stamina, waits 1 more second and starts training again. For Punch speed and Punch sharpness it puts the gloves back on (key 1) first.
+- Put the energy item in slot 4, food in slot 2 and water in slot 3 of your hotbar.
+- If a bar is empty again right after using the item (no items left?), the macro does not retry, shows a warning and goes on training.
+- For energy you also get the beep and the warning. For food and water there is no sound.
+- Untick a box to turn that feature off.
 
 SETTINGS
 - Lead time, ms: compensates screen and input delay. Clicks too late? Raise it (50, 70...). Too early? Lower it. It matters most on fast equipment.
@@ -152,9 +173,21 @@ const guideRU = `HAJIME MACRO - РУКОВОДСТВО
 
 ПРЕДУПРЕЖДЕНИЯ
 Внизу окна появляется красное "ВНИМАНИЕ" и звучит сигнал. Несколько предупреждений могут показываться одновременно.
-- Достигнут кап стата: игра пишет "... is at your goal ... training won't raise it further". Тренировка при этом продолжается, поэтому макрос предупреждает в начале каждой тренировки.
+- Достигнут кап стата: игра пишет "... is at your goal ... training won't raise it further". Макрос подаёт сигнал, прерывает тренировку (как F6, клавишей E) и больше её не начинает.
 - Энергии меньше 10%: жёлтая шкала энергии справа внизу почти пуста. Восстановите её. Проверка повторяется в начале каждой тренировки.
 - Перчатки не надеты (Punch speed, Punch sharpness): макрос ждёт, пока вы наденете их (клавиша 1).
+
+АВТО-ЭНЕРГИЯ / ЕДА / ВОДА
+Три галочки под кнопкой Старт. Если галочка включена, макрос следит за тремя шкалами справа внизу (жёлтая - энергия, еда, вода).
+- Он срабатывает, когда энергии меньше 10% либо еды или воды 5% и меньше. Макрос прерывает тренировку клавишей E и затем:
+  - энергия: клавиша 4, 0.5 с, ЛКМ, 0.5 с, ЛКМ;
+  - еда: клавиша 2, 0.5 с, три ЛКМ с паузой 0.5 с;
+  - вода: клавиша 3, 0.5 с, два ЛКМ с паузой 0.5 с.
+- Потом ждёт полную стамину, ещё 1 секунду и снова начинает тренировку. Для Punch speed и Punch sharpness перед этим снова надевает перчатки (клавиша 1).
+- Положите предмет с энергией в слот 4, еду в слот 2, воду в слот 3 панели.
+- Если шкала снова пуста сразу после использования (кончились предметы?), макрос не повторяет попытку, показывает предупреждение и продолжает тренироваться.
+- Для энергии есть ещё сигнал и предупреждение. Для еды и воды звука нет.
+- Снимите галочку, чтобы отключить функцию.
 
 НАСТРОЙКИ
 - Опережение, мс: компенсирует задержку экрана и ввода. Клики поздно? Увеличь (50, 70...). Рано? Уменьши. Важнее всего на быстрых тренажёрах.
@@ -195,9 +228,21 @@ QUÉ HACE EL MACRO
 
 AVISOS
 Abajo en la ventana aparece "ATENCIÓN" en rojo y suena un pitido. Pueden mostrarse varios avisos a la vez.
-- Límite del stat alcanzado: el juego dice "... is at your goal ... training won't raise it further". El entrenamiento continúa, por eso el macro avisa al inicio de cada entrenamiento.
+- Límite del stat alcanzado: el juego dice "... is at your goal ... training won't raise it further". El macro pita, detiene el entrenamiento (como F6, con E) y no lo vuelve a iniciar.
 - Energía por debajo del 10 %: la barra amarilla de energía (abajo a la derecha) está casi vacía. Recupérala. Se comprueba al inicio de cada entrenamiento.
 - Guantes no equipados (Punch speed, Punch sharpness): el macro espera hasta que te los equipes (tecla 1).
+
+ENERGÍA / COMIDA / AGUA AUTO
+Tres casillas bajo el botón Iniciar. Si una está activa, el macro vigila las tres barras de abajo a la derecha (amarilla: energía, comida, agua).
+- Actúa cuando la energía baja del 10 %, o la comida o el agua están al 5 % o menos. El macro detiene el entrenamiento con E y luego:
+  - energía: tecla 4, 0,5 s, clic izquierdo, 0,5 s, clic izquierdo;
+  - comida: tecla 2, 0,5 s, tres clics izquierdos con 0,5 s entre ellos;
+  - agua: tecla 3, 0,5 s, dos clics izquierdos con 0,5 s entre ellos.
+- Después espera la resistencia completa, 1 segundo más y vuelve a entrenar. En Punch speed y Punch sharpness antes vuelve a poner los guantes (tecla 1).
+- Pon el objeto de energía en la ranura 4, la comida en la 2 y el agua en la 3 de la barra.
+- Si la barra vuelve a estar vacía justo después de usar el objeto (¿sin objetos?), el macro no reintenta, muestra un aviso y sigue entrenando.
+- Con la energía también hay pitido y aviso. Con comida y agua no hay sonido.
+- Desmarca la casilla para desactivar esa función.
 
 AJUSTES
 - Adelanto, ms: compensa el retraso de la pantalla y de la entrada. ¿Los clics llegan tarde? Súbelo (50, 70...). ¿Demasiado pronto? Bájalo. Importa sobre todo en equipos rápidos.

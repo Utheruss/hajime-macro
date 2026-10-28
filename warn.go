@@ -270,3 +270,53 @@ func EnergyLow(f *Frame) (low, ok bool) {
 	}
 	return Energy(f, g) < 0.10, true
 }
+
+// ---------- энергия, еда, вода ----------
+
+// Supplies - заполненность трёх шкал справа внизу (0..1).
+type Supplies struct {
+	Energy, Food, Water float64
+	OK                  bool
+}
+
+func isFoodFill(r, g, b int) bool  { return r >= 75 && r > g && g >= b-5 && r-b >= 45 }
+func isWaterFill(r, g, b int) bool { return b >= 140 && b > g && g > r && b-r >= 60 }
+
+// tubeFill - заполненность трубки по самой верхней строке заливки в её внутренней части.
+func tubeFill(f *Frame, x0, x1, y0, y1 int, fill func(r, g, b int) bool) float64 {
+	if x0 < 0 || y0 < 0 || x1 >= f.W || y1 >= f.H || y1 <= y0 {
+		return 0
+	}
+	cx := x0 + (x1-x0)*2/5
+	for y := y0; y <= y1; y++ {
+		r, g, b := f.RGB(cx, y)
+		if fill(r, g, b) {
+			return float64(y1-y+1) / float64(y1-y0+1)
+		}
+	}
+	return 0
+}
+
+// ReadSupplies читает энергию, еду и воду. Положение еды и воды берётся от трубки энергии
+// (трубки стоят рядом на одинаковом расстоянии и масштабируются вместе с интерфейсом).
+func ReadSupplies(f *Frame) Supplies {
+	g, ok := LocateEnergy(f)
+	if !ok {
+		return Supplies{}
+	}
+	s := float64(g.Y1-g.Y0+1) / 123.0
+	off := func(v float64) int { return int(v*s + 0.5) }
+	return Supplies{
+		Energy: Energy(f, g),
+		Food:   tubeFill(f, g.X0+off(30), g.X1+off(30), g.Y0+off(4), g.Y1-off(2), isFoodFill),
+		Water:  tubeFill(f, g.X0+off(60), g.X1+off(60), g.Y0+off(2), g.Y1, isWaterFill),
+		OK:     true,
+	}
+}
+
+// Пороги: энергия меньше 10%, еда и вода - 5% и меньше.
+const (
+	energyLowAt = 0.10
+	foodLowAt   = 0.055
+	waterLowAt  = 0.055
+)

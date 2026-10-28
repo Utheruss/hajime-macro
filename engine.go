@@ -17,6 +17,7 @@ type Env interface {
 	RClick()
 	Beep()            // звуковое предупреждение
 	KeyE()            // нажать и отпустить E
+	Key(n int)        // нажать и отпустить цифровую клавишу n (1..9): слот панели
 	EnsureFocus()     // вынести игру на передний план и убрать курсор в её окно
 	GameActive() bool // окно игры сейчас активно (на переднем плане)
 	Done() bool       // true - пора выходить (для тестов)
@@ -41,8 +42,15 @@ type Settings struct {
 	Mode    int
 	LeadMs  float64 // опережение: компенсация задержек захвата экрана и ввода
 	PunchMs float64 // режим 3: пауза между ударами
-	Gloves  bool    // для полоски: нужны ли перчатки (Punch speed)
+	Gloves  bool    // нужны ли перчатки (Punch speed, Punch sharpness)
+	Auto    uint32  // автопополнение: AutoEnergy | AutoFood | AutoWater
 }
+
+const (
+	AutoEnergy uint32 = 1 << iota
+	AutoFood
+	AutoWater
+)
 
 type state int
 
@@ -52,6 +60,7 @@ const (
 	stWaitBar
 	stTrain
 	stBag
+	stSupply // автопополнение энергии/еды/воды
 )
 
 type sample struct{ t, x float64 }
@@ -125,6 +134,19 @@ type Engine struct {
 	warnNext   float64
 	bagEnergy  bool
 
+	// автопополнение и остановка по капу
+	need       uint32 // что надо пополнить (AutoEnergy|AutoFood|AutoWater), пишет фоновая проверка
+	capStop    int32  // 1 - кап достигнут, пора остановиться
+	supNext    float64
+	supSteps   []supStep
+	supIdx     int
+	supAt      float64
+	supPhase   int // 0 - ждём, пока закончится тренировка (E), 1 - выполняем шаги
+	supDeadl   float64
+	supBag     bool
+	lastSupply [3]float64
+	supplyOff  uint32 // пополнение, которое не помогло: до конца сессии отключено
+
 	// статистика сессии
 	trainings int64
 	punches   int64
@@ -133,7 +155,9 @@ type Engine struct {
 }
 
 func NewEngine(env Env, set func() Settings, status StatusFn) *Engine {
-	return &Engine{env: env, cmds: make(chan Cmd, 8), set: set, status: status, lastStam: -1, fullSince: -1}
+	e := &Engine{env: env, cmds: make(chan Cmd, 8), set: set, status: status, lastStam: -1, fullSince: -1}
+	e.resetSupply()
+	return e
 }
 
 func (e *Engine) Send(c Cmd) {
@@ -182,6 +206,7 @@ const (
 	WarnGloves uint32 = 1 << iota // перчатки не надеты
 	WarnCap                       // кап стата достигнут (тренировка больше его не повышает)
 	WarnEnergy                    // энергии меньше 10%
+	WarnSupply                    // автопополнение не помогло (кончились предметы?)
 )
 
 // Warnings - набор активных предупреждений (битовая маска Warn*).
@@ -271,19 +296,16 @@ func (e *Engine) runWarnCheck() {
 	if atomic.LoadInt32(&e.capSeen) == 0 {
 		if CapMessage(e.env.Grab(CapBand(w, h)), e.capScales(h)) {
 			atomic.StoreInt32(&e.capSeen, 1)
+			atomic.StoreInt32(&e.capStop, 1)
 			raised = e.setWarn(WarnCap, true) || raised
 		}
 	}
 	if energy {
-		// берём только правый нижний угол и кладём его в пустой кадр полного размера
-		xs, ys := w*68/100, h*45/100
-		part := e.env.Grab(Rect{xs, ys, w - xs, h - ys})
-		full := NewFrame(w, h)
-		for y := 0; y < part.H; y++ {
-			copy(full.Pix[((ys+y)*w+xs)*4:], part.Pix[y*part.W*4:(y+1)*part.W*4])
-		}
-		if low, found := EnergyLow(full); found {
-			raised = e.setWarn(WarnEnergy, low) || raised
+		sp := e.grabSupplies(w, h)
+		need, r2 := e.applySupplies(sp)
+		raised = r2 || raised
+		if need != 0 {
+			atomic.OrUint32(&e.need, need)
 		}
 	}
 	if raised {
@@ -291,11 +313,210 @@ func (e *Engine) runWarnCheck() {
 	}
 }
 
+// grabSupplies читает шкалы энергии, еды и воды (захватывается только правый нижний угол).
+func (e *Engine) grabSupplies(w, h int) Supplies {
+	xs, ys := w*68/100, h*45/100
+	part := e.env.Grab(Rect{xs, ys, w - xs, h - ys})
+	full := NewFrame(w, h)
+	for y := 0; y < part.H; y++ {
+		copy(full.Pix[((ys+y)*w+xs)*4:], part.Pix[y*part.W*4:(y+1)*part.W*4])
+	}
+	return ReadSupplies(full)
+}
+
+// applySupplies выставляет предупреждение об энергии и возвращает, что надо пополнить.
+func (e *Engine) applySupplies(sp Supplies) (need uint32, raised bool) {
+	if !sp.OK {
+		return 0, false
+	}
+	low := sp.Energy < energyLowAt
+	raised = e.setWarn(WarnEnergy, low)
+	auto := e.set().Auto &^ atomic.LoadUint32(&e.supplyOff)
+	if low && auto&AutoEnergy != 0 {
+		need |= AutoEnergy
+	}
+	if sp.Food <= foodLowAt && auto&AutoFood != 0 {
+		need |= AutoFood
+	}
+	if sp.Water <= waterLowAt && auto&AutoWater != 0 {
+		need |= AutoWater
+	}
+	return need, raised
+}
+
+// supplyNow - синхронная проверка (вне тренировки, когда спешить некуда); что надо пополнить.
+func (e *Engine) supplyNow() uint32 {
+	w, h, ok := e.env.ClientSize()
+	if !ok {
+		return 0
+	}
+	need, raised := e.applySupplies(e.grabSupplies(w, h))
+	if raised {
+		e.env.Beep()
+	}
+	return need
+}
+
+func (e *Engine) resetSupply() {
+	for i := range e.lastSupply {
+		e.lastSupply[i] = -1e9
+	}
+	atomic.StoreUint32(&e.supplyOff, 0)
+	atomic.StoreUint32(&e.need, 0)
+	atomic.StoreInt32(&e.capStop, 0)
+}
+
+// halt - остановка, как по F6: тренировка прерывается клавишей E, макрос уходит в покой.
+// keep - предупреждения, которые остаются на экране.
+func (e *Engine) halt(keep uint32) {
+	e.releaseAll()
+	if w, h, ok := e.env.ClientSize(); ok && e.st != stBag && e.st != stSupply {
+		if _, found := FindBar(e.env.Grab(Rect{0, 0, w, h})); found {
+			e.env.EnsureFocus()
+			e.env.KeyE()
+		}
+	}
+	atomic.StoreUint32(&e.warn, atomic.LoadUint32(&e.warn)&keep)
+	e.setState(stIdle)
+}
+
+// ---------- автопополнение ----------
+
+type supStep struct {
+	key   int     // цифровая клавиша слота (0 - нет)
+	click bool    // клик левой кнопкой
+	wait  float64 // пауза после шага, секунд
+	msg   string  // сообщение статуса перед шагом
+}
+
+// supplySteps - порядок действий: слот 4 (энергия), 2 (еда), 3 (вода); пауза 0.5 с между действиями.
+func supplySteps(mask uint32, gloves bool) []supStep {
+	var st []supStep
+	add := func(key, clicks int, msg string) {
+		st = append(st, supStep{key: key, wait: 0.5, msg: msg})
+		for i := 0; i < clicks; i++ {
+			st = append(st, supStep{click: true, wait: 0.5})
+		}
+	}
+	if mask&AutoEnergy != 0 {
+		add(4, 2, "st.supply_e")
+	}
+	if mask&AutoFood != 0 {
+		add(2, 3, "st.supply_f")
+	}
+	if mask&AutoWater != 0 {
+		add(3, 2, "st.supply_w")
+	}
+	if gloves {
+		// слот с предметом сменил перчатки - надеваем их обратно
+		st = append(st, supStep{key: 1, wait: 0.4})
+	}
+	return st
+}
+
+func (e *Engine) startSupply(mask uint32) {
+	now := e.env.Now()
+	failed := false
+	for i, b := range []uint32{AutoEnergy, AutoFood, AutoWater} {
+		if mask&b == 0 {
+			continue
+		}
+		if now-e.lastSupply[i] < 90 {
+			// недавно уже пополняли, а шкала снова пуста: предметов, скорее всего, нет
+			atomic.OrUint32(&e.supplyOff, b)
+			mask &^= b
+			failed = true
+			continue
+		}
+		e.lastSupply[i] = now
+	}
+	if failed {
+		e.setWarn(WarnSupply, true)
+		e.env.Beep()
+	}
+	if mask == 0 {
+		return
+	}
+	set := e.set()
+	e.supBag = e.st == stBag || set.Mode == 3
+	e.supSteps = supplySteps(mask, set.Gloves || set.Mode == 3)
+	e.supIdx = 0
+	e.releaseAll()
+	e.supPhase, e.supAt = 1, now+0.2
+	if e.st != stBag {
+		if w, h, ok := e.env.ClientSize(); ok {
+			if _, found := FindBar(e.env.Grab(Rect{0, 0, w, h})); found {
+				// тренировка идёт: останавливаем её клавишей E
+				e.env.EnsureFocus()
+				e.env.KeyE()
+				e.supPhase, e.supDeadl = 0, now+3.0
+				e.say("st.supply_stop")
+			}
+		}
+	}
+	e.setState(stSupply)
+}
+
+func (e *Engine) supplyTick() {
+	now := e.env.Now()
+	if e.supPhase == 0 {
+		if w, h, ok := e.env.ClientSize(); ok {
+			if _, found := FindBar(e.env.Grab(Rect{0, 0, w, h})); !found {
+				e.supPhase, e.supAt = 1, now+0.5
+				return
+			}
+		}
+		if now > e.supDeadl {
+			e.supPhase, e.supAt = 1, now+0.3
+		}
+		e.env.Sleep(80)
+		return
+	}
+	if now < e.supAt {
+		e.env.Sleep(10)
+		return
+	}
+	if e.supIdx >= len(e.supSteps) {
+		e.finishSupply()
+		return
+	}
+	if e.supIdx == 0 {
+		e.env.EnsureFocus()
+	}
+	st := e.supSteps[e.supIdx]
+	e.supIdx++
+	if st.msg != "" {
+		e.say(st.msg)
+	}
+	if st.key > 0 {
+		e.env.Key(st.key)
+	} else if st.click {
+		e.env.Click()
+	}
+	e.supAt = now + st.wait
+}
+
+// finishSupply: дальше как обычно - ждём полную стамину, секунду, и тренировки продолжаются.
+func (e *Engine) finishSupply() {
+	e.fullSince = -1
+	e.clearWarn(WarnEnergy)
+	atomic.StoreUint32(&e.need, 0)
+	if e.supBag {
+		e.bagRest, e.bagLeft = true, true
+		e.nextPunch = e.env.Now()
+		e.setState(stBag)
+		e.say("st.bag_rest")
+		return
+	}
+	e.setState(stSeek)
+}
+
 // newTrainingWarnings - начало новой тренировки: предупреждения проверяются заново.
 func (e *Engine) newTrainingWarnings(now float64) {
 	e.clearWarn(WarnCap | WarnEnergy | WarnGloves)
 	atomic.StoreInt32(&e.capSeen, 0)
 	e.capChecks, e.capRecheck = 2, now+1.0
+	e.supNext = now + 4
 	e.checkWarnings(true)
 }
 
@@ -340,6 +561,16 @@ func (e *Engine) Run() {
 		} else {
 			e.paused = false
 		}
+		if atomic.SwapInt32(&e.capStop, 0) == 1 && e.st != stIdle {
+			// кап достигнут: тренировка прерывается и больше не начинается
+			e.halt(WarnCap)
+			e.say("st.cap_stop")
+			continue
+		}
+		if n := atomic.SwapUint32(&e.need, 0); n != 0 && e.st != stIdle && e.st != stSupply {
+			e.startSupply(n)
+			continue
+		}
 		switch e.st {
 		case stIdle:
 			e.idleTick()
@@ -351,6 +582,8 @@ func (e *Engine) Run() {
 			e.trainTick()
 		case stBag:
 			e.bagTick()
+		case stSupply:
+			e.supplyTick()
 		}
 	}
 	e.releaseAll()
@@ -367,6 +600,8 @@ func (e *Engine) onResume() {
 		e.deadline = now + 3.5
 	case stBag:
 		e.nextPunch = now + 0.3
+	case stSupply:
+		e.supAt = now + 0.5
 	}
 }
 
@@ -382,6 +617,8 @@ func (e *Engine) toggle() {
 		e.retries = 0
 		e.fullSince = -1
 		e.stamOK = false
+		e.resetSupply()
+		atomic.StoreUint32(&e.warn, 0)
 		e.env.EnsureFocus()
 		if e.set().Mode == 3 {
 			e.bagRest, e.bagLeft, e.glvWarned = false, true, false
@@ -399,15 +636,7 @@ func (e *Engine) toggle() {
 		return
 	}
 	// остановка: если тренировка идёт - нажимаем E, чтобы её прервать
-	e.releaseAll()
-	if w, h, ok := e.env.ClientSize(); ok && e.st != stBag {
-		if _, found := FindBar(e.env.Grab(Rect{0, 0, w, h})); found {
-			e.env.EnsureFocus()
-			e.env.KeyE()
-		}
-	}
-	atomic.StoreUint32(&e.warn, 0)
-	e.setState(stIdle)
+	e.halt(0)
 	e.say("st.stopped")
 }
 
@@ -502,6 +731,10 @@ func (e *Engine) seekTick() {
 		}
 		if now-e.fullSince >= fullWait {
 			e.fullSince = -1
+			if need := e.supplyNow(); need != 0 {
+				e.startSupply(need) // сначала пополняем энергию/еду/воду, потом тренируемся
+				return
+			}
 			e.env.EnsureFocus()
 			e.env.KeyE()
 			e.setState(stWaitBar)
@@ -650,6 +883,11 @@ func (e *Engine) trainTick() {
 		e.capChecks--
 		e.capRecheck = e.env.Now() + 1.5
 		e.checkWarnings(false)
+	}
+	if e.env.Now() >= e.supNext {
+		// раз в несколько секунд смотрим на энергию, еду и воду
+		e.supNext = e.env.Now() + 4
+		e.checkWarnings(true)
 	}
 	fr := e.env.Grab(e.strip)
 	t := e.env.Now()
@@ -815,11 +1053,11 @@ func (e *Engine) bagTick() {
 		e.nextPunch = now
 	}
 	if now >= e.warnNext {
-		e.checkWarnings(e.bagEnergy)
+		e.checkWarnings(true)
 		e.bagEnergy = false
 		e.warnNext = now + 1.5
 		if atomic.LoadInt32(&e.capSeen) == 1 {
-			e.warnNext = now + 3600
+			e.warnNext = now + 4
 		}
 	}
 	if e.bagRest {
@@ -828,6 +1066,11 @@ func (e *Engine) bagTick() {
 				e.fullSince = now
 			}
 			if now-e.fullSince >= fullWait {
+				if need := e.supplyNow(); need != 0 {
+					e.fullSince = -1
+					e.startSupply(need)
+					return
+				}
 				e.bagRest, e.fullSince = false, -1
 				e.nextPunch = now
 				e.clearWarn(WarnCap | WarnEnergy)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -50,11 +51,21 @@ type sim struct {
 	clickTimes     []float64
 	hotbar         bool
 	capMsg         bool
+	food, water    float64 // <0 - шкалы нет
+	equip          int
+	items          bool // предметы в слотах 2-4 есть
+	eStops         bool // E закрывает полоску (тренировка прерывается)
+	log            []evtLog
 	energy         float64 // <0 - шкалы нет на экране
 	glovesOn       bool
 	drain          float64
 	keyE           int
 	stepT          float64
+}
+
+type evtLog struct {
+	t    float64
+	what string
 }
 
 type evt struct {
@@ -66,7 +77,7 @@ func newSim(mode int, speed float64, accel bool) *sim {
 	s := &sim{mode: mode, cw: 1917, ch: 1078, bx0: 721, bx1: 1198, by0: 406, by1: 428, bar: true,
 		dispLag: 0.025, inLag: 0.010, grabCost: 0.002, limit: 30, rng: rand.New(rand.NewSource(1)),
 		speed: speed, accel: accel, maxSp: 960, stam: 1, dir: 1}
-	s.energy = -1
+	s.energy, s.food, s.water = -1, -1, -1
 	s.x = float64(s.bx0) + 2
 	s.newBox()
 	return s
@@ -166,8 +177,34 @@ func (s *sim) GameActive() bool {
 	return true
 }
 func (s *sim) EnsureFocus() {}
-func (s *sim) KeyE()        { s.keyE++ }
+func (s *sim) KeyE() {
+	s.keyE++
+	s.log = append(s.log, evtLog{s.t, "E"})
+	if s.eStops {
+		s.bar = !s.bar // E останавливает тренировку или запускает новую
+	}
+}
+
+// Key - цифровой слот: выбранный предмет можно "использовать" кликом
+func (s *sim) Key(n int) {
+	s.advanceTo(s.t + 0.001)
+	s.equip = n
+	s.log = append(s.log, evtLog{s.t, fmt.Sprint(n)})
+}
 func (s *sim) Click() {
+	s.log = append(s.log, evtLog{s.t, "click"})
+	if s.equip >= 2 && s.equip <= 4 && s.items {
+		// клик с предметом в руке: пополняет соответствующую шкалу
+		switch s.equip {
+		case 4:
+			s.energy = math.Min(1, s.energy+0.3)
+		case 2:
+			s.food = math.Min(1, s.food+0.3)
+		case 3:
+			s.water = math.Min(1, s.water+0.3)
+		}
+		return
+	}
 	s.clicks++
 	s.clickTimes = append(s.clickTimes, s.t)
 	if s.mode == 3 {
@@ -243,6 +280,45 @@ func (s *sim) warnPixel(x, y int) (int, int, int, bool) {
 			return 232, 217, 83, true
 		}
 		return 42, 40, 66, true
+	}
+	// еда (x+30) и вода (x+60): цвета как в игре
+	for i, lvl := range []float64{s.food, s.water} {
+		if lvl < 0 {
+			continue
+		}
+		dx := 30 * (i + 1)
+		if x < 1814+dx || x > 1839+dx || y < 924 || y > 1057 {
+			continue
+		}
+		xx := x - dx
+		if xx <= 1815 || xx >= 1838 || y <= 925 || y >= 1056 {
+			return 19, 18, 58, true
+		}
+		if xx <= 1817 {
+			return 169, 173, 220, true
+		}
+		if xx >= 1836 {
+			return 91, 93, 148, true
+		}
+		if i == 0 { // еда
+			if y < 937 {
+				return 138, 130, 192, true
+			}
+			if y > 1053 {
+				return 58, 45, 92, true
+			}
+			if y >= 1053-int(lvl*117)+1 {
+				return 168, 105, 60, true
+			}
+			return 44, 34, 54, true
+		}
+		if y < 935 {
+			return 63, 111, 208, true
+		}
+		if y >= 1055-int(lvl*121)+1 {
+			return 120, 176, 212, true
+		}
+		return 38, 58, 86, true
 	}
 	return 0, 0, 0, false
 }
@@ -587,5 +663,163 @@ func TestSimWarningsAsync(t *testing.T) {
 	mu.Unlock()
 	if beeps != 2 {
 		t.Errorf("async: при новой тренировке ожидали 2 писка, было %d", beeps)
+	}
+}
+
+func logWhat(s *sim) []string {
+	var r []string
+	for _, l := range s.log {
+		r = append(r, l.what)
+	}
+	return r
+}
+
+func supplySim(energy, food, water float64, items bool) *sim {
+	s := newSim(1, 300, false)
+	s.eStops, s.items = true, items
+	s.energy, s.food, s.water = energy, food, water
+	s.hotbar, s.glovesOn = true, true
+	s.limit = 30
+	return s
+}
+
+func runAuto(s *sim, auto uint32, gloves bool) *Engine {
+	set := func() Settings { return Settings{Mode: 1, LeadMs: 35, PunchMs: 300, Auto: auto, Gloves: gloves} }
+	e := NewEngine(s, set, func(string, []any, float64) {})
+	e.Send(CmdToggle)
+	e.Run()
+	return e
+}
+
+func seqIndex(seq []string, want ...string) int {
+	// индекс начала подпоследовательности want в seq (подряд идущие элементы), -1 - нет
+	for i := 0; i+len(want) <= len(seq); i++ {
+		ok := true
+		for j := range want {
+			if seq[i+j] != want[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
+
+func gap(t *testing.T, s *sim, from int, a, b string, want float64) {
+	t.Helper()
+	for i := from; i+1 < len(s.log); i++ {
+		if s.log[i].what == a && s.log[i+1].what == b {
+			if d := s.log[i+1].t - s.log[i].t; d < want-0.03 || d > want+0.08 {
+				t.Errorf("пауза %s -> %s: %.3f с, ожидали %.1f", a, b, d, want)
+			}
+			return
+		}
+	}
+}
+
+func TestSimAutoEnergy(t *testing.T) {
+	s := supplySim(0.05, 0.8, 0.8, true)
+	e := runAuto(s, AutoEnergy|AutoFood|AutoWater, false)
+	seq := logWhat(s)
+	i := seqIndex(seq, "E", "4", "click", "click")
+	if i < 0 {
+		t.Fatalf("ожидали E, 4, ЛКМ, ЛКМ; было %v", seq)
+	}
+	gap(t, s, i, "4", "click", 0.5)
+	gap(t, s, i+2, "click", "click", 0.5)
+	// после пополнения тренировка начинается заново (E)
+	if seqIndex(seq[i+4:], "E") < 0 {
+		t.Errorf("после пополнения ожидали новый запуск тренировки (E): %v", seq)
+	}
+	if s.energy < 0.5 {
+		t.Errorf("энергия не пополнилась: %.2f", s.energy)
+	}
+	_ = e
+}
+
+func TestSimAutoFoodWater(t *testing.T) {
+	s := supplySim(0.9, 0.03, 0.04, true)
+	runAuto(s, AutoEnergy|AutoFood|AutoWater, false)
+	seq := logWhat(s)
+	if i := seqIndex(seq, "E", "2", "click", "click", "click", "3", "click", "click"); i < 0 {
+		t.Fatalf("ожидали E, 2, 3xЛКМ, 3, 2xЛКМ; было %v", seq)
+	}
+	if s.beeps != 0 {
+		t.Errorf("для еды и воды сигнала быть не должно, было %d", s.beeps)
+	}
+}
+
+func TestSimAutoDisabled(t *testing.T) {
+	s := supplySim(0.05, 0.02, 0.02, true)
+	s.limit = 8
+	e := runAuto(s, 0, false)
+	for _, w := range logWhat(s) {
+		if w == "2" || w == "3" || w == "4" {
+			t.Errorf("автопополнение выключено, а нажат слот %s", w)
+		}
+	}
+	if e.Warnings()&WarnEnergy == 0 {
+		t.Errorf("предупреждение об энергии должно оставаться")
+	}
+}
+
+func TestSimAutoGlovesBack(t *testing.T) {
+	s := supplySim(0.05, 0.8, 0.8, true)
+	runAuto(s, AutoEnergy, true)
+	if seqIndex(logWhat(s), "4", "click", "click", "1") < 0 {
+		t.Errorf("после пополнения должны быть снова надеты перчатки (1): %v", logWhat(s))
+	}
+}
+
+func TestSimAutoNoItems(t *testing.T) {
+	// предметов нет: пополнение не помогает, повторно не пытаемся, предупреждаем
+	s := supplySim(0.8, 0.02, 0.8, false)
+	s.limit = 100
+	e := runAuto(s, AutoFood, false)
+	n := 0
+	for _, w := range logWhat(s) {
+		if w == "2" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("слот 2 должен быть нажат один раз, было %d", n)
+	}
+	if e.Warnings()&WarnSupply == 0 {
+		t.Errorf("ожидали предупреждение, что пополнение не помогло")
+	}
+}
+
+func TestSimCapStop(t *testing.T) {
+	s := supplySim(0.9, 0.9, 0.9, true)
+	s.capMsg = true
+	s.limit = 15
+	e := runAuto(s, AutoEnergy|AutoFood|AutoWater, false)
+	if e.Running() {
+		t.Errorf("при капе макрос должен остановиться")
+	}
+	if e.Warnings()&WarnCap == 0 {
+		t.Errorf("предупреждение о капе должно остаться на экране")
+	}
+	if s.keyE != 1 {
+		t.Errorf("тренировка должна быть прервана клавишей E один раз, было %d", s.keyE)
+	}
+}
+
+func TestSimCapStopBag(t *testing.T) {
+	s := newSim(3, 0, false)
+	s.bar = false
+	s.hotbar, s.glovesOn = true, true
+	s.capMsg = true
+	s.limit = 15
+	set := func() Settings { return Settings{Mode: 3, LeadMs: 35, PunchMs: 300} }
+	e := NewEngine(s, set, func(string, []any, float64) {})
+	e.Send(CmdToggle)
+	e.Run()
+	if e.Running() || s.keyE != 0 {
+		t.Errorf("груша: ожидали остановку без E, running=%v E=%d", e.Running(), s.keyE)
 	}
 }
