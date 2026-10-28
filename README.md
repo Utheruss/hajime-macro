@@ -13,10 +13,15 @@ It only **reads the screen and emulates mouse/keyboard input**, like a human wou
 - Pauses automatically while the Roblox window is not active.
 - Works on any resolution and Windows UI scale (everything is detected from the screen).
 - Stat cap reached: the macro beeps, stops the training (like F6) and does not start it again.
-- Auto energy / food / water (checkboxes): when energy < 10% or food/water <= 5%, it stops the training with E, uses the item from hotbar slot 4 / 2 / 3 (key, then left clicks) and continues after full stamina.
+- Auto energy / food / water (three checkboxes, on by default): when energy < 10% or food/water <= 5%, the macro stops the training with `E`, then uses the item from your hotbar and goes back to training after full stamina (+1 s):
+  - energy: key `4`, left click, left click
+  - food: key `2`, left click x4
+  - water: key `3`, left click x2
+
+  (0.25 s between actions; for Punch speed / Punch sharpness the gloves, key `1`, are re-equipped afterwards. If a bar is empty again right after use, e.g. no items left, the macro does not retry and shows a warning.)
 - Red "WARNING" with a beep (several can show at once): stat cap reached, energy below 10%, gloves not equipped (Punch speed / Punch sharpness). Cap and energy are re-checked at the start of every training.
 - Languages: English (default), Русский, Español. Built-in usage guide (the **i** button).
-- Adjustable click lead time and punch delay, session statistics, "Diagnostics" button (saves a screenshot and detection report).
+- Adjustable click lead time and punch delay, session statistics, "Diagnostics" button (saves a screenshot, a detection report and a log of the latest macro actions). The window also shows the energy / food / water levels the macro reads.
 
 ## Usage
 1. Download `HajimeMacro.exe` from the Releases page (or build it yourself, see below).
