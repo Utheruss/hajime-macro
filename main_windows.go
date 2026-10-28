@@ -660,6 +660,9 @@ func refreshUI() {
 		st = L("ui.stamina", int(stam*100+0.5))
 	}
 	pSendMessage.Call(hProg, pbmSetPos, pos, 0)
+	if en, fo, wa := engine.LastSupplies(); en >= 0 {
+		st += fmt.Sprintf("   E %d%%  F %d%%  W %d%%", int(en*100+0.5), int(fo*100+0.5), int(wa*100+0.5))
+	}
 	if st != lastStam {
 		lastStam = st
 		setText(hStam, st)
@@ -747,6 +750,10 @@ func saveDiag() {
 	if f2 := env.Grab(Rect{0, 0, w, h}); f2 != nil {
 		sp := ReadSupplies(f2)
 		fmt.Fprintf(&sb, "supplies now: ok=%v energy %.2f food %.2f water %.2f\n", sp.OK, sp.Energy, sp.Food, sp.Water)
+	}
+	sb.WriteString("events (newest last):\n")
+	for _, ev := range engine.Events() {
+		sb.WriteString("  " + ev + "\n")
 	}
 	fmt.Fprintf(&sb, "mode=%d lead=%dms punch delay=%dms lang=%d\n", atomic.LoadInt32(&curMode), settings.LeadMs, settings.PunchMs, settings.Lang)
 	os.WriteFile(filepath.Join(dir, "hajime_diag.txt"), []byte(sb.String()), 0644)

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 )
 
@@ -147,6 +149,8 @@ type Engine struct {
 	supBag     bool
 	lastSupply [3]float64
 	supBits    [3]uint64
+	evMu       sync.Mutex
+	events     []string
 	supplyOff  uint32 // пополнение, которое не помогло: до конца сессии отключено
 
 	// статистика сессии
@@ -169,8 +173,31 @@ func (e *Engine) Send(c Cmd) {
 	}
 }
 
+// logf - короткий журнал событий движка для диагностики (последние 80).
+func (e *Engine) logf(format string, args ...any) {
+	line := fmt.Sprintf("%7.2f ", e.env.Now()) + fmt.Sprintf(format, args...)
+	e.evMu.Lock()
+	e.events = append(e.events, line)
+	if len(e.events) > 80 {
+		e.events = e.events[len(e.events)-80:]
+	}
+	e.evMu.Unlock()
+}
+
+// Events - копия журнала событий.
+func (e *Engine) Events() []string {
+	e.evMu.Lock()
+	defer e.evMu.Unlock()
+	return append([]string(nil), e.events...)
+}
+
+var stateNames = []string{"idle", "seek", "waitBar", "train", "bag", "supply"}
+
 func (e *Engine) setState(s state) {
 	was := e.st
+	if s != was && int(s) < len(stateNames) {
+		e.logf("state %s -> %s", stateNames[was], stateNames[s])
+	}
 	e.st = s
 	now := int64(e.env.Now() * 1e9)
 	if s == stIdle {
@@ -307,6 +334,7 @@ func (e *Engine) runWarnCheck() {
 		need, r2 := e.applySupplies(sp)
 		raised = r2 || raised
 		if need != 0 {
+			e.logf("low supplies detected: need=%03b (E %.2f F %.2f W %.2f)", need, sp.Energy, sp.Food, sp.Water)
 			atomic.OrUint32(&e.need, need)
 		}
 	}
@@ -341,6 +369,7 @@ func (e *Engine) confirmSupplies(w, h int) Supplies {
 		return a
 	}
 	e.storeSupplies(b)
+	e.logf("supplies read twice: %.2f/%.2f/%.2f then %.2f/%.2f/%.2f", a.Energy, a.Food, a.Water, b.Energy, b.Food, b.Water)
 	return Supplies{
 		Energy: math.Max(a.Energy, b.Energy),
 		Food:   math.Max(a.Food, b.Food),
@@ -414,6 +443,7 @@ func (e *Engine) resetSupply() {
 // halt - остановка, как по F6: тренировка прерывается клавишей E, макрос уходит в покой.
 // keep - предупреждения, которые остаются на экране.
 func (e *Engine) halt(keep uint32) {
+	e.logf("halt (keep warnings %b)", keep)
 	e.releaseAll()
 	if w, h, ok := e.env.ClientSize(); ok && e.st != stBag && e.st != stSupply {
 		if _, found := FindBar(e.env.Grab(Rect{0, 0, w, h})); found {
@@ -468,6 +498,7 @@ func supplySteps(mask uint32, gloves bool) []supStep {
 
 func (e *Engine) startSupply(mask uint32) {
 	now := e.env.Now()
+	e.logf("supply requested mask=%03b", mask)
 	failed := false
 	for i, b := range []uint32{AutoEnergy, AutoFood, AutoWater} {
 		if mask&b == 0 {
@@ -475,6 +506,7 @@ func (e *Engine) startSupply(mask uint32) {
 		}
 		if now-e.lastSupply[i] < 90 {
 			// недавно уже пополняли, а шкала снова пуста: предметов, скорее всего, нет
+			e.logf("supply %03b triggered again within 90 s: disabled", b)
 			atomic.OrUint32(&e.supplyOff, b)
 			mask &^= b
 			failed = true
@@ -537,6 +569,7 @@ func (e *Engine) supplyTick() {
 	}
 	st := e.supSteps[e.supIdx]
 	e.supIdx++
+	e.logf("supply step %d/%d key=%d click=%v", e.supIdx, len(e.supSteps), st.key, st.click)
 	if st.msg != "" {
 		e.say(st.msg)
 	}
@@ -550,6 +583,7 @@ func (e *Engine) supplyTick() {
 
 // finishSupply: дальше как обычно - ждём полную стамину, секунду, и тренировки продолжаются.
 func (e *Engine) finishSupply() {
+	e.logf("supply finished")
 	e.fullSince = -1
 	e.clearWarn(WarnEnergy)
 	atomic.StoreUint32(&e.need, 0)
@@ -613,8 +647,10 @@ func (e *Engine) Run() {
 		} else {
 			e.paused = false
 		}
-		if atomic.SwapInt32(&e.capStop, 0) == 1 && e.st != stIdle {
+		if atomic.LoadInt32(&e.capStop) == 1 && e.st != stIdle {
 			// кап достигнут: тренировка прерывается и больше не начинается
+			atomic.StoreInt32(&e.capStop, 0)
+			e.logf("cap message found: stopping")
 			e.halt(WarnCap)
 			e.say("st.cap_stop")
 			continue
@@ -895,6 +931,7 @@ func (e *Engine) beginTrain(bar Bar) {
 	e.lastSeen = e.env.Now()
 	e.lastStat = 0
 	atomic.AddInt64(&e.trainings, 1)
+	e.logf("training begins, mode %d", e.curMode)
 	e.newTrainingWarnings(e.env.Now())
 	e.say("st.training", e.curMode)
 }
