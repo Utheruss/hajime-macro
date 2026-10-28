@@ -569,8 +569,9 @@ func TestSimWarnings(t *testing.T) {
 	s.limit = 6
 	s.capMsg, s.energy = true, 0.06
 	e := run(t, s, 35)
-	if w := e.Warnings(); w&WarnCap == 0 || w&WarnEnergy == 0 {
-		t.Errorf("ожидали предупреждения о капе и энергии, флаги %b", w)
+	// кап останавливает макрос; на экране остаётся только предупреждение о капе
+	if w := e.Warnings(); w != WarnCap || e.Running() {
+		t.Errorf("ожидали остановку с предупреждением о капе, флаги %b, running=%v", w, e.Running())
 	}
 	if s.beeps != 1 {
 		t.Errorf("ожидали один писк на обе новые тревоги, было %d", s.beeps)
@@ -608,8 +609,8 @@ func TestSimBagWarnings(t *testing.T) {
 	e := NewEngine(s, set, func(string, []any, float64) {})
 	e.Send(CmdToggle)
 	e.Run()
-	if w := e.Warnings(); w&WarnCap == 0 || w&WarnEnergy == 0 {
-		t.Errorf("груша: ожидали предупреждения о капе и энергии, флаги %b", w)
+	if w := e.Warnings(); w != WarnCap || e.Running() {
+		t.Errorf("груша: ожидали остановку с предупреждением о капе, флаги %b, running=%v", w, e.Running())
 	}
 	if s.beeps != 1 {
 		t.Errorf("груша: ожидали один писк, было %d", s.beeps)
