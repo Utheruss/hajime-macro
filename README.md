@@ -18,6 +18,8 @@ It only **reads the screen and emulates mouse/keyboard input**, like a human wou
   - food: key `2`, left click x4
   - water: key `3`, left click x2
 
+  **Requires: FOOD in hotbar slot 2, WATER in slot 3, ENERGY DRINK in slot 4.**
+
   (0.25 s between actions; for Punch speed / Punch sharpness the gloves, key `1`, are re-equipped afterwards. If a bar is empty again right after use, e.g. no items left, the macro does not retry and shows a warning.)
 - Red "WARNING" with a beep (several can show at once): stat cap reached, energy below 10%, gloves not equipped (Punch speed / Punch sharpness). Cap and energy are re-checked at the start of every training.
 - Languages: English (default), Русский, Español. Built-in usage guide (the **i** button).
