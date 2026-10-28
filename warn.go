@@ -30,8 +30,8 @@ func rnd(v float64) int { return int(v + 0.5) }
 
 // CapBand - полоса кадра, где может быть сообщение о капе.
 func CapBand(w, h int) Rect {
-	y0 := h * 55 / 100
-	return Rect{0, y0, w, h*93/100 - y0}
+	x0, y0 := w*20/100, h*60/100
+	return Rect{x0, y0, w*90/100 - x0, h*88/100 - y0}
 }
 
 // softWhite / softDark - насколько пиксель похож на белый текст / тёмную обводку (0..1);

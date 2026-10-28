@@ -888,6 +888,7 @@ func main() {
 			Gloves:  statDefs[settings.Stat].gloves,
 		}
 	}, setStatus)
+	engine.Async = true
 
 	registerClass("HajimeMacroWnd", syscall.NewCallback(wndProc))
 	registerClass("HajimeGuideWnd", syscall.NewCallback(guideProc))

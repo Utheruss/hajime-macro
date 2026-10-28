@@ -3,7 +3,10 @@ package main
 import (
 	"math"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Симулятор игры: рисует полоску так же, как в игре, двигает индикатор и считает ошибки кликов.
@@ -534,5 +537,55 @@ func TestSimBagWarnings(t *testing.T) {
 	}
 	if s.beeps != 1 {
 		t.Errorf("груша: ожидали один писк, было %d", s.beeps)
+	}
+}
+
+// lockedEnv - обёртка, делающая симулятор безопасным для вызовов из фонового потока.
+type lockedEnv struct {
+	*sim
+	mu *sync.Mutex
+}
+
+func (l lockedEnv) Grab(r Rect) *Frame {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sim.Grab(r)
+}
+
+func (l lockedEnv) Beep() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sim.Beep()
+}
+
+func TestSimWarningsAsync(t *testing.T) {
+	s := newSim(1, 300, false)
+	s.capMsg, s.energy = true, 0.06
+	var mu sync.Mutex
+	env := lockedEnv{s, &mu}
+	e := NewEngine(env, func() Settings { return Settings{Mode: 1, LeadMs: 35, PunchMs: 300} }, func(string, []any, float64) {})
+	e.Async = true
+	e.newTrainingWarnings(0)
+	for i := 0; i < 400 && atomic.LoadInt32(&e.warnBusy) == 1; i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	beeps := s.beeps
+	mu.Unlock()
+	if w := e.Warnings(); w&WarnCap == 0 || w&WarnEnergy == 0 || beeps != 1 {
+		t.Errorf("async: флаги %b, писков %d", w, beeps)
+	}
+	// повторный запрос во время/после работы не теряется
+	e.newTrainingWarnings(1)
+	for i := 0; i < 400 && atomic.LoadInt32(&e.warnBusy) == 1; i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	beeps = s.beeps
+	mu.Unlock()
+	if beeps != 2 {
+		t.Errorf("async: при новой тренировке ожидали 2 писка, было %d", beeps)
 	}
 }

@@ -114,7 +114,12 @@ type Engine struct {
 
 	// предупреждения (WarnGloves/WarnCap/WarnEnergy), читаются из интерфейса
 	warn       uint32
-	capSeen    bool
+	capSeen    int32 // 0/1, атомарно: пишет фоновая проверка
+	Async      bool  // проверки предупреждений идут в фоне, чтобы не тормозить кликер
+	warnBusy   int32
+	reqPending int32
+	reqEnergy  int32
+	scaleBits  uint64
 	capChecks  int
 	capRecheck float64
 	warnNext   float64
@@ -216,30 +221,68 @@ func (e *Engine) capScales(h int) []float64 {
 		}
 		ks = append(ks, k)
 	}
-	if e.stamOK {
-		add(e.stam.Scale())
+	if k := math.Float64frombits(atomic.LoadUint64(&e.scaleBits)); k > 0 {
+		add(k)
 	}
 	add(float64(h) / 1078)
 	add(1.0)
 	return ks
 }
 
-// checkWarnings ищет на экране сообщение о капе и (если energy) читает шкалу энергии.
-// При появлении нового предупреждения подаёт звуковой сигнал.
+// checkWarnings запрашивает проверку: сообщение о капе и (если energy) шкала энергии.
+// В игре проверка идёт в фоне (Async), потому что поиск на экране занимает десятки миллисекунд,
+// а кликер в это время не должен ничего пропускать.
 func (e *Engine) checkWarnings(energy bool) {
+	if energy {
+		atomic.StoreInt32(&e.reqEnergy, 1)
+	}
+	if !e.Async {
+		e.runWarnCheck()
+		return
+	}
+	atomic.StoreInt32(&e.reqPending, 1)
+	e.startWarnWorker()
+}
+
+func (e *Engine) startWarnWorker() {
+	if !atomic.CompareAndSwapInt32(&e.warnBusy, 0, 1) {
+		return
+	}
+	go func() {
+		for {
+			for atomic.CompareAndSwapInt32(&e.reqPending, 1, 0) {
+				e.runWarnCheck()
+			}
+			atomic.StoreInt32(&e.warnBusy, 0)
+			if atomic.LoadInt32(&e.reqPending) == 0 || !atomic.CompareAndSwapInt32(&e.warnBusy, 0, 1) {
+				return
+			}
+		}
+	}()
+}
+
+func (e *Engine) runWarnCheck() {
+	energy := atomic.SwapInt32(&e.reqEnergy, 0) == 1
 	w, h, ok := e.env.ClientSize()
 	if !ok {
 		return
 	}
 	raised := false
-	if !e.capSeen {
+	if atomic.LoadInt32(&e.capSeen) == 0 {
 		if CapMessage(e.env.Grab(CapBand(w, h)), e.capScales(h)) {
-			e.capSeen = true
+			atomic.StoreInt32(&e.capSeen, 1)
 			raised = e.setWarn(WarnCap, true) || raised
 		}
 	}
 	if energy {
-		if low, found := EnergyLow(e.env.Grab(Rect{0, 0, w, h})); found {
+		// берём только правый нижний угол и кладём его в пустой кадр полного размера
+		xs, ys := w*68/100, h*45/100
+		part := e.env.Grab(Rect{xs, ys, w - xs, h - ys})
+		full := NewFrame(w, h)
+		for y := 0; y < part.H; y++ {
+			copy(full.Pix[((ys+y)*w+xs)*4:], part.Pix[y*part.W*4:(y+1)*part.W*4])
+		}
+		if low, found := EnergyLow(full); found {
 			raised = e.setWarn(WarnEnergy, low) || raised
 		}
 	}
@@ -251,7 +294,7 @@ func (e *Engine) checkWarnings(energy bool) {
 // newTrainingWarnings - начало новой тренировки: предупреждения проверяются заново.
 func (e *Engine) newTrainingWarnings(now float64) {
 	e.clearWarn(WarnCap | WarnEnergy | WarnGloves)
-	e.capSeen = false
+	atomic.StoreInt32(&e.capSeen, 0)
 	e.capChecks, e.capRecheck = 2, now+1.0
 	e.checkWarnings(true)
 }
@@ -344,7 +387,8 @@ func (e *Engine) toggle() {
 			e.bagRest, e.bagLeft, e.glvWarned = false, true, false
 			e.bagCheckAt = 0
 			e.clearWarn(WarnCap | WarnEnergy | WarnGloves)
-			e.capSeen, e.bagEnergy, e.warnNext = false, true, e.env.Now()
+			atomic.StoreInt32(&e.capSeen, 0)
+			e.bagEnergy, e.warnNext = true, e.env.Now()
 			e.nextPunch = e.env.Now()
 			e.setState(stBag)
 			e.say("st.bag")
@@ -374,6 +418,7 @@ func (e *Engine) locateStamina(full *Frame) bool {
 	if ok {
 		e.stam = g
 		e.stamSize = [2]int{full.W, full.H}
+		atomic.StoreUint64(&e.scaleBits, math.Float64bits(g.Scale()))
 	}
 	return ok
 }
@@ -600,7 +645,7 @@ func (e *Engine) pushSample(t, x float64) {
 }
 
 func (e *Engine) trainTick() {
-	if !e.capSeen && e.capChecks > 0 && e.env.Now() >= e.capRecheck {
+	if atomic.LoadInt32(&e.capSeen) == 0 && e.capChecks > 0 && e.env.Now() >= e.capRecheck {
 		// сообщение о капе может появиться не сразу - перепроверяем пару раз
 		e.capChecks--
 		e.capRecheck = e.env.Now() + 1.5
@@ -773,7 +818,7 @@ func (e *Engine) bagTick() {
 		e.checkWarnings(e.bagEnergy)
 		e.bagEnergy = false
 		e.warnNext = now + 1.5
-		if e.capSeen {
+		if atomic.LoadInt32(&e.capSeen) == 1 {
 			e.warnNext = now + 3600
 		}
 	}
@@ -786,7 +831,8 @@ func (e *Engine) bagTick() {
 				e.bagRest, e.fullSince = false, -1
 				e.nextPunch = now
 				e.clearWarn(WarnCap | WarnEnergy)
-				e.capSeen, e.bagEnergy, e.warnNext = false, true, now+0.4
+				atomic.StoreInt32(&e.capSeen, 0)
+				e.bagEnergy, e.warnNext = true, now+0.4
 				e.say("st.bag")
 				return
 			}
